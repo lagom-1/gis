@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import traceback
 from datetime import datetime
 from pathlib import Path
@@ -110,6 +111,9 @@ def _collect_output_files(task_id: int, start_timestamp: float = None) -> list:
     return files
 
 
+_output_dir_lock = threading.Lock()
+
+
 def _execute_gis_task(task_id: int, input_text: str, celery_task_id: str = None) -> Dict[str, Any]:
     """实际执行 GIS 任务的核心逻辑"""
     logger.info(f"开始执行任务 {task_id}: {input_text}")
@@ -120,14 +124,16 @@ def _execute_gis_task(task_id: int, input_text: str, celery_task_id: str = None)
 
     _update_task_status(task_id, "running", celery_task_id=celery_task_id)
 
-    # 使用输出目录
+    # 使用输出目录（加锁避免竞争）
     output_dir = _setup_task_output_dir()
-    original_outputs_dir = app_config.OUTPUTS_DIR
-    app_config.OUTPUTS_DIR = output_dir
     logger.info(f"任务 {task_id} 输出目录: {output_dir}")
 
+    with _output_dir_lock:
+        original_outputs_dir = app_config.OUTPUTS_DIR
+        app_config.OUTPUTS_DIR = output_dir
+
     try:
-        # 初始化 GEE
+        # 初始化 GEE（带锁避免并发初始化）
         from agent.gee_client import init_gee
         gee_result = init_gee()
         if not gee_result.get("success"):
@@ -174,8 +180,8 @@ def _execute_gis_task(task_id: int, input_text: str, celery_task_id: str = None)
             "error": error_msg,
         }
     finally:
-        # 恢复原始输出目录
-        app_config.OUTPUTS_DIR = original_outputs_dir
+        with _output_dir_lock:
+            app_config.OUTPUTS_DIR = original_outputs_dir
 
 
 if HAS_CELERY:

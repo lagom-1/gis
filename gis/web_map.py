@@ -498,6 +498,8 @@ def generate_timelapse_web_map(
     colormap: str = "coolwarm",
     overlay_opacity: float = 0.7,
     month: int = 8,
+    vmin: float = None,
+    vmax: float = None,
 ) -> Dict[str, Any]:
     """
     生成多年 LST 时间序列交互式地图。
@@ -574,8 +576,10 @@ def generate_timelapse_web_map(
                 "rows": len(grid), "cols": len(grid[0]) if grid else 0,
             }
 
-            vmin = float(np.percentile(valid, 2))
-            vmax = float(np.percentile(valid, 98))
+            if vmin is None:
+                vmin = float(np.percentile(valid, 2))
+            if vmax is None:
+                vmax = float(np.percentile(valid, 98))
             global_vmin = min(global_vmin, vmin)
             global_vmax = max(global_vmax, vmax)
 

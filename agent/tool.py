@@ -431,8 +431,6 @@ def register_tools(registry: ToolRegistry, runtime: GISRuntime, preferences: Dic
                     output_path=web_map_path,
                     title=title or f"{month}月地表温度变化 {start_year}-{end_year}",
                     month=month,
-                    vmin=result.get("vmin"),
-                    vmax=result.get("vmax"),
                 )
                 if web_result.get("success"):
                     result["web_map_path"] = web_map_path

@@ -20,8 +20,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from api.database import get_db
-from api.models import Download, Order, OrderStatus, Task, TaskStatus, User
-from api.routers.auth import _get_current_user
+from api.models import Download, Order, OrderStatus, Task, TaskStatus
 from api.services.file_service import (
     check_file_type_permission,
     generate_thumbnail,
@@ -30,6 +29,9 @@ from api.services.file_service import (
     get_thumbnail_path,
 )
 from api.services.payment_service import check_download_permission
+
+# 默认用户 ID，无需认证
+DEFAULT_USER_ID = 1
 
 router = APIRouter(prefix="/api/downloads", tags=["下载"])
 
@@ -41,7 +43,6 @@ router = APIRouter(prefix="/api/downloads", tags=["下载"])
 async def get_task_files_info(
     task_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(_get_current_user),
 ) -> Dict[str, Any]:
     """
     获取任务输出文件的元数据和预览信息。
@@ -54,7 +55,7 @@ async def get_task_files_info(
     # 验证任务
     task = db.query(Task).filter(
         Task.id == task_id,
-        Task.user_id == current_user.id,
+        Task.user_id == DEFAULT_USER_ID,
     ).first()
     if task is None:
         raise HTTPException(status_code=404, detail="任务不存在")
@@ -71,7 +72,7 @@ async def get_task_files_info(
     # 检查用户是否有已支付的订单
     paid_order = db.query(Order).filter(
         Order.task_id == task_id,
-        Order.user_id == current_user.id,
+        Order.user_id == DEFAULT_USER_ID,
         Order.status == OrderStatus.PAID,
     ).first()
 
@@ -93,7 +94,6 @@ async def preview_file(
     task_id: int,
     filename: str,
     db: Session = Depends(get_db),
-    current_user: User = Depends(_get_current_user),
 ):
     """
     预览输出文件的缩略图（免费）。
@@ -108,7 +108,7 @@ async def preview_file(
     # 验证任务
     task = db.query(Task).filter(
         Task.id == task_id,
-        Task.user_id == current_user.id,
+        Task.user_id == DEFAULT_USER_ID,
     ).first()
     if task is None:
         raise HTTPException(status_code=404, detail="任务不存在")
@@ -157,7 +157,6 @@ async def download_file(
     task_id: int,
     filename: str,
     db: Session = Depends(get_db),
-    current_user: User = Depends(_get_current_user),
 ):
     """
     下载指定任务的完整输出文件（需付费）。
@@ -176,7 +175,7 @@ async def download_file(
     # 验证任务
     task = db.query(Task).filter(
         Task.id == task_id,
-        Task.user_id == current_user.id,
+        Task.user_id == DEFAULT_USER_ID,
     ).first()
     if task is None:
         raise HTTPException(status_code=404, detail="任务不存在")
@@ -211,13 +210,13 @@ async def download_file(
         order = check_download_permission(
             db=db,
             task_id=task_id,
-            user_id=current_user.id,
+            user_id=DEFAULT_USER_ID,
             file_type=file_type,
         )
 
         # 记录下载行为
         download_record = Download(
-            user_id=current_user.id,
+            user_id=DEFAULT_USER_ID,
             order_id=order.id,
             task_id=task_id,
             file_path=str(file_path),

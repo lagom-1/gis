@@ -26,7 +26,6 @@ from api.models import (
     TaskStatus,
     User,
 )
-from api.routers.auth import _get_current_user
 from api.services.payment_service import (
     PRICING_TIERS,
     create_alipay_order,
@@ -40,6 +39,9 @@ from api.services.payment_service import (
 )
 
 logger = logging.getLogger(__name__)
+
+# 默认用户 ID，无需认证
+DEFAULT_USER_ID = 1
 
 router = APIRouter(prefix="/api/payments", tags=["支付"])
 
@@ -129,7 +131,6 @@ async def list_pricing_tiers():
 async def create_payment(
     request: PaymentCreateRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(_get_current_user),
 ):
     """
     创建支付订单并返回支付链接。
@@ -151,10 +152,18 @@ async def create_payment(
 
     get_tier_info(request.tier)  # 验证层级是否存在
 
+    # 获取默认用户对象（支付服务需要 User 对象）
+    current_user = db.query(User).filter(User.id == DEFAULT_USER_ID).first()
+    if current_user is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="默认用户不存在，请先初始化数据库",
+        )
+
     # 验证任务
     task = db.query(Task).filter(
         Task.id == request.task_id,
-        Task.user_id == current_user.id,
+        Task.user_id == DEFAULT_USER_ID,
     ).first()
     if task is None:
         raise HTTPException(
@@ -292,14 +301,13 @@ async def stripe_webhook(
 async def get_order(
     order_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(_get_current_user),
 ):
     """
     查询指定订单的状态。
 
     仅返回属于当前用户的订单。
     """
-    order = get_order_status(db, order_id, current_user.id)
+    order = get_order_status(db, order_id, DEFAULT_USER_ID)
     return order
 
 
@@ -307,7 +315,6 @@ async def get_order(
 async def cancel_order(
     order_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(_get_current_user),
 ):
     """
     取消待支付的订单。
@@ -316,7 +323,7 @@ async def cancel_order(
     """
     order = db.query(Order).filter(
         Order.id == order_id,
-        Order.user_id == current_user.id,
+        Order.user_id == DEFAULT_USER_ID,
     ).first()
 
     if order is None:
@@ -334,7 +341,7 @@ async def cancel_order(
     order.status = OrderStatus.CANCELLED
     db.commit()
 
-    logger.info(f"订单已取消: order_id={order_id}, user={current_user.id}")
+    logger.info(f"订单已取消: order_id={order_id}, user={DEFAULT_USER_ID}")
 
     return MessageResponse(success=True, message="订单已取消")
 
@@ -343,7 +350,6 @@ async def cancel_order(
 async def get_orders_by_task(
     task_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(_get_current_user),
 ):
     """
     查询指定任务关联的所有订单。
@@ -353,7 +359,7 @@ async def get_orders_by_task(
     # 验证任务属于当前用户
     task = db.query(Task).filter(
         Task.id == task_id,
-        Task.user_id == current_user.id,
+        Task.user_id == DEFAULT_USER_ID,
     ).first()
     if task is None:
         raise HTTPException(
@@ -363,7 +369,7 @@ async def get_orders_by_task(
 
     orders = db.query(Order).filter(
         Order.task_id == task_id,
-        Order.user_id == current_user.id,
+        Order.user_id == DEFAULT_USER_ID,
     ).order_by(Order.created_at.desc()).all()
 
     return orders

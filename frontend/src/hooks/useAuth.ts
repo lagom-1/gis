@@ -1,23 +1,21 @@
-import { useEffect } from 'react'
-import { useAuthStore } from '../stores/authStore'
+import type { User } from '../types'
+
+const dummyUser: User = {
+  id: 0,
+  username: 'guest',
+  email: 'guest@opengis.local',
+  credits: 9999,
+  created_at: new Date().toISOString(),
+}
 
 export function useAuth() {
-  const { user, token, isLoading, error, login, register, logout, fetchUser } = useAuthStore()
-
-  useEffect(() => {
-    if (token && !user) {
-      fetchUser()
-    }
-  }, [token, user, fetchUser])
-
-  // 只要 token 存在就认为已认证，不依赖 user 是否加载完成
   return {
-    user,
-    isAuthenticated: !!token,
-    isLoading,
-    error,
-    login,
-    register,
-    logout,
+    user: dummyUser,
+    isAuthenticated: true,
+    isLoading: false,
+    error: null,
+    login: async () => {},
+    register: async () => {},
+    logout: () => {},
   }
 }
