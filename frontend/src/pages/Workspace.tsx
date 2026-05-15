@@ -13,6 +13,7 @@ export default function Workspace() {
   const [fullscreenPreview, setFullscreenPreview] = useState(false)
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const workspaceTaskIdRef = useRef<number | null>(null)
   const { createTask, currentTask, fetchTask } = useTaskStore()
   const {
     messages,
@@ -36,18 +37,20 @@ export default function Workspace() {
 
   // 轮询任务状态
   useEffect(() => {
-    if (!currentTask || currentTask.status === 'completed' || currentTask.status === 'failed') {
-      return
-    }
+    if (!currentTask) return
+    if (currentTask.id !== workspaceTaskIdRef.current) return
+    if (currentTask.status === 'completed' || currentTask.status === 'failed') return
+
     const interval = setInterval(async () => {
       await fetchTask(currentTask.id)
     }, 3000)
     return () => clearInterval(interval)
-  }, [currentTask, fetchTask])
+  }, [currentTask?.id, currentTask?.status, fetchTask])
 
-  // 任务完成时更新输出 + 显示 Agent 回复（防止重复处理）
+  // 任务完成/失败时更新输出 + 显示 Agent 回复
   useEffect(() => {
     if (!currentTask) return
+    if (currentTask.id !== workspaceTaskIdRef.current) return
     if (processedTaskIds.has(currentTask.id)) return
 
     if (currentTask.status === 'completed') {
@@ -61,25 +64,31 @@ export default function Workspace() {
         setPreviewFile(gifFile || mapFile || lstFile || files[0])
       }
 
-      const answer = currentTask.final_answer
-      if (answer && answer.trim()) {
-        addMessage({ role: 'assistant', content: answer, taskId: currentTask.id })
-      } else if (files.length > 0) {
-        addMessage({
-          role: 'assistant',
-          content: `任务完成。\n\n生成文件：\n${files.map(f => `  ${f.name} (${formatSize(f.size)})`).join('\n')}`,
-          taskId: currentTask.id,
-        })
+      const alreadyHasMessage = messages.some(m => m.role === 'assistant' && m.taskId === currentTask.id)
+      if (!alreadyHasMessage) {
+        const answer = currentTask.final_answer
+        if (answer && answer.trim()) {
+          addMessage({ role: 'assistant', content: answer, taskId: currentTask.id })
+        } else if (files.length > 0) {
+          addMessage({
+            role: 'assistant',
+            content: `任务完成。\n\n生成文件：\n${files.map(f => `  ${f.name} (${formatSize(f.size)})`).join('\n')}`,
+            taskId: currentTask.id,
+          })
+        }
       }
 
       processedTaskIds.add(currentTask.id)
       setIsProcessing(false)
     } else if (currentTask.status === 'failed') {
-      addMessage({ role: 'assistant', content: `任务失败：${currentTask.error_message || '未知错误'}` })
+      const alreadyHasMessage = messages.some(m => m.role === 'assistant' && m.taskId === currentTask.id)
+      if (!alreadyHasMessage) {
+        addMessage({ role: 'assistant', content: `❌ 任务执行失败：${currentTask.error_message || '未知错误'}`, taskId: currentTask.id })
+      }
       processedTaskIds.add(currentTask.id)
       setIsProcessing(false)
     }
-  }, [currentTask?.status, currentTask?.id])
+  }, [currentTask?.status, currentTask?.id, messages])
 
   const handleSubmit = useCallback(async () => {
     if (!input.trim() || isProcessing) return
@@ -92,14 +101,14 @@ export default function Workspace() {
 
     try {
       const task = await createTask({ input_text: userMessage })
+      workspaceTaskIdRef.current = task.id
+      // 如果任务同步返回了结果（极快完成或失败），立即拉取最新状态
       if (task.status === 'completed' || task.status === 'failed') {
         await fetchTask(task.id)
-      } else {
-        addMessage({ role: 'assistant', content: '正在处理中，请稍候...' })
       }
     } catch {
       toast.error('任务提交失败')
-      addMessage({ role: 'assistant', content: '任务提交失败，请重试。' })
+      addMessage({ role: 'assistant', content: '❌ 任务提交失败，请检查后端服务是否正常。' })
       setIsProcessing(false)
     }
   }, [input, isProcessing, addMessage, createTask, fetchTask])
@@ -109,6 +118,7 @@ export default function Workspace() {
     setCurrentOutput([])
     setPreviewFile(null)
     processedTaskIds.clear()
+    workspaceTaskIdRef.current = null
   }
 
   const getFileUrl = (file: OutputFile) => `/outputs/${file.relative_path || file.name}`

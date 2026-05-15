@@ -3,13 +3,16 @@
 统一管理工具的规格定义和处理器实现
 
 【修改】新增 GEE 时间序列工具（timelapse / split_panel / trend_chart）
+【修复】GISRuntime.reset_for_new_task() 仅重置跨任务易污染的状态
 """
 
 from __future__ import annotations
 
 import os
+import re
 from datetime import date, timedelta
 from pathlib import Path
+
 from typing import Any, Dict
 
 from config import WORKSPACE_DIR, DEFAULT_MAP_STYLE, GEE_DRIVE_FOLDER, GDRIVE_SYNC_DIR
@@ -35,7 +38,7 @@ from gis.web_map import generate_web_map, generate_timelapse_web_map
 from gis.admin_region import resolve_admin_region
 
 # ── GEE / geemap 工具 ─────────────────────────────────
-from gis.gee_tools import gee_init, gee_download_landsat_sca
+from gis.gee_tools import gee_init, gee_download_landsat_sca, gee_download_monthly_lst, gee_download_yearly_lst, gee_download_multi_year_lst
 
 # ── GEE 时间序列工具（新增）────────────────────────────
 from gis.gee_timelapse import (
@@ -83,6 +86,20 @@ class GISRuntime:
         self.last_region_name: str | None = None
         self.map_style: Dict[str, Any] = dict(DEFAULT_MAP_STYLE)
 
+    def reset_for_new_task(self) -> None:
+        """
+        新任务开始时重置跨任务易污染的状态。
+        防止上一个任务的行政区边界、数据集等泄漏到新任务中。
+
+        修复：跨任务状态污染问题 - last_region_geojson 等状态在新任务中
+        必须清空，否则前一个任务的行政区边界会被错误地用于新任务。
+        """
+        self.current_dataset = None
+        self.source_dataset = None
+        self.last_region_geojson = None
+        self.last_region_name = None
+        # last_output 和 map_style 保留，因为它们属于会话级偏好
+
     def current_tif(self) -> str | None:
         if self.current_dataset and os.path.exists(self.current_dataset):
             return self.current_dataset
@@ -95,6 +112,79 @@ def _safe_stem(path: str | None, fallback: str = "result") -> str:
     if path:
         return Path(path).stem
     return fallback
+
+
+def _sanitize_filename(name: str) -> str:
+    """移除文件名中不允许的字符"""
+    return re.sub(r'[\\/:*?"<>|\s]+', '_', name).strip('_')
+
+
+def build_task_filename(
+    region_name: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    year: int | None = None,
+    start_year: int | None = None,
+    end_year: int | None = None,
+    month: int | None = None,
+    product: str = "LST",
+    quality: str | None = None,
+    suffix: str = ".tif",
+) -> str:
+    """
+    生成可读的任务输出文件名。
+
+    示例：
+      build_task_filename(region_name="旺苍县", start_date="2024-07-01", end_date="2024-07-31", product="LST")
+        → "旺苍县_2024年7月_LST.tif"
+      build_task_filename(region_name="旺苍县", year=2025, product="LST")
+        → "旺苍县_2025年全年_LST"
+      build_task_filename(region_name="旺苍县", start_year=2020, end_year=2025, month=8, product="LST")
+        → "旺苍县_2020-2025年8月_LST"
+      build_task_filename(region_name="温江区", start_date="2024-07-01", end_date="2024-07-31", product="Landsat_SCA")
+        → "温江区_2024年7月_Landsat_SCA.tif"
+    """
+    parts = []
+
+    # 区域名
+    if region_name:
+        # 只取最后一级名称（如"四川省广元市旺苍县" → "旺苍县"）
+        for sep in ["省", "市", "区", "县", "旗"]:
+            if sep in region_name:
+                idx = region_name.rfind(sep)
+                region_name = region_name[idx + 1:]
+                if region_name:
+                    break
+        parts.append(_sanitize_filename(region_name))
+
+    # 时间信息
+    if start_year and end_year and month:
+        parts.append(f"{start_year}-{end_year}年{month}月")
+    elif year and not start_date:
+        parts.append(f"{year}年全年")
+    elif start_date and end_date:
+        from datetime import datetime
+        try:
+            sd = datetime.strptime(start_date, "%Y-%m-%d")
+            ed = datetime.strptime(end_date, "%Y-%m-%d")
+            if sd.year == ed.year and sd.month == ed.month:
+                parts.append(f"{sd.year}年{sd.month}月")
+            else:
+                parts.append(f"{start_date}_至_{end_date}")
+        except ValueError:
+            parts.append(f"{start_date}_至_{end_date}")
+
+    # 产品类型
+    parts.append(product)
+
+    # 质量等级（可选）
+    if quality:
+        parts.append(f"质量{quality}")
+
+    name = "_".join(parts)
+    if suffix and not name.endswith(suffix):
+        name += suffix
+    return name
 
 
 def _default_last_full_month() -> tuple[str, str]:
@@ -165,8 +255,11 @@ def register_tools(registry: ToolRegistry, runtime: GISRuntime, preferences: Dic
         if not start_date or not end_date:
             start_date, end_date = _default_last_full_month()
 
-        # ── 关键检查：region 不能为 None ──
-        region = args.get("region") or runtime.last_region_geojson
+        # ── 关键检查：region 不能为 None，禁止静默回退到旧区域 ──
+        region = args.get("region")
+        if region is None:
+            # 仅当当前任务已通过 resolve_admin_region 设置了区域时才允许使用
+            region = runtime.last_region_geojson
         if region is None:
             return {
                 "success": False,
@@ -178,8 +271,9 @@ def register_tools(registry: ToolRegistry, runtime: GISRuntime, preferences: Dic
                 "requires": "resolve_admin_region 或 region 参数",
             }
 
-        stem = f"gee_sca_{start_date.replace('-', '')}_{end_date.replace('-', '')}"
-        output_tif = args.get("output_tif") or str(out_dir() / f"{stem}.tif")
+        region_name = runtime.last_region_name or ""
+        filename = build_task_filename(region_name=region_name, start_date=start_date, end_date=end_date, product="Landsat_SCA")
+        output_tif = args.get("output_tif") or str(out_dir() / filename)
 
         result = gee_download_landsat_sca(
             start_date=start_date,
@@ -203,6 +297,152 @@ def register_tools(registry: ToolRegistry, runtime: GISRuntime, preferences: Dic
             runtime.last_output = None
             if runtime.source_dataset is None:
                 runtime.source_dataset = result.get("output_tif")
+
+        return result
+
+    # ─────────────────────────────────────────────────────
+    # 月度 LST 合成（逐景反演后均值）
+    # ─────────────────────────────────────────────────────
+
+    def gee_download_monthly_lst_tool(args: Dict[str, Any]) -> Dict[str, Any]:
+        start_date = args.get("start_date")
+        end_date = args.get("end_date")
+
+        if not start_date or not end_date:
+            start_date, end_date = _default_last_full_month()
+
+        region = args.get("region")
+        if region is None:
+            region = runtime.last_region_geojson
+        if region is None:
+            return {
+                "success": False,
+                "message": (
+                    "缺少研究区边界（region）。"
+                    "如果是行政区名称（如'温江区'），请先调用 resolve_admin_region 解析边界；"
+                    "如果是 bbox 坐标，请直接传入 region=[xmin,ymin,xmax,ymax]。"
+                ),
+                "requires": "resolve_admin_region 或 region 参数",
+            }
+
+        region_name = runtime.last_region_name or ""
+        filename = build_task_filename(region_name=region_name, start_date=start_date, end_date=end_date, product="LST")
+        output_tif = args.get("output_tif") or str(out_dir() / filename)
+
+        result = gee_download_monthly_lst(
+            start_date=start_date,
+            end_date=end_date,
+            output_tif=output_tif,
+            region=region,
+            region_path=args.get("region_path"),
+            scale=int(args.get("scale", 30)),
+            project_id=args.get("project_id"),
+            drive_folder=args.get("drive_folder") or GEE_DRIVE_FOLDER,
+            local_drive_path=args.get("local_drive_path") or str(GDRIVE_SYNC_DIR),
+            download_timeout=int(args.get("download_timeout", 1800)),
+        )
+
+        if result.get("success") and result.get("output_tif") and os.path.exists(result["output_tif"]):
+            runtime.current_dataset = result.get("output_tif")
+            runtime.last_tif_output = result.get("output_tif")
+            runtime.last_output = None
+            if runtime.source_dataset is None:
+                runtime.source_dataset = result.get("output_tif")
+
+        return result
+
+    # ─────────────────────────────────────────────────────
+    # 年度批量 LST 合成
+    # ─────────────────────────────────────────────────────
+
+    def gee_download_yearly_lst_tool(args: Dict[str, Any]) -> Dict[str, Any]:
+        year = int(args.get("year", 2025))
+
+        region = args.get("region")
+        if region is None:
+            region = runtime.last_region_geojson
+        if region is None:
+            return {
+                "success": False,
+                "message": (
+                    "缺少研究区边界（region）。"
+                    "如果是行政区名称（如'旺苍县'），请先调用 resolve_admin_region 解析边界；"
+                    "如果是 bbox 坐标，请直接传入 region=[xmin,ymin,xmax,ymax]。"
+                ),
+                "requires": "resolve_admin_region 或 region 参数",
+            }
+
+        region_name = runtime.last_region_name or ""
+        dir_name = build_task_filename(region_name=region_name, year=year, product="全年LST", suffix="")
+        output_dir = args.get("output_dir") or str(out_dir() / dir_name)
+
+        result = gee_download_yearly_lst(
+            year=year,
+            output_dir=output_dir,
+            region=region,
+            region_path=args.get("region_path"),
+            scale=int(args.get("scale", 30)),
+            project_id=args.get("project_id"),
+            drive_folder=args.get("drive_folder") or GEE_DRIVE_FOLDER,
+            local_drive_path=args.get("local_drive_path") or str(GDRIVE_SYNC_DIR),
+            download_timeout=int(args.get("download_timeout", 1800)),
+        )
+
+        if result.get("success") and result.get("results"):
+            # 设置最后一个成功月份为当前数据集
+            last = result["results"][-1]
+            if last.get("output_tif") and os.path.exists(last["output_tif"]):
+                runtime.current_dataset = last["output_tif"]
+                runtime.last_tif_output = last["output_tif"]
+
+        return result
+
+    # ─────────────────────────────────────────────────────
+    # 跨多年单月 LST 批量反演
+    # ─────────────────────────────────────────────────────
+
+    def gee_download_multi_year_lst_tool(args: Dict[str, Any]) -> Dict[str, Any]:
+        start_year = int(args.get("start_year", 2020))
+        end_year = int(args.get("end_year", 2025))
+        month = int(args.get("month", 8))
+
+        region = args.get("region")
+        if region is None:
+            region = runtime.last_region_geojson
+        if region is None:
+            return {
+                "success": False,
+                "message": (
+                    "缺少研究区边界（region）。"
+                    "如果是行政区名称，请先调用 resolve_admin_region 解析边界；"
+                    "如果是 bbox 坐标，请直接传入 region=[xmin,ymin,xmax,ymax]。"
+                ),
+                "requires": "resolve_admin_region 或 region 参数",
+            }
+
+        region_name = runtime.last_region_name or ""
+        dir_name = build_task_filename(region_name=region_name, start_year=start_year, end_year=end_year, month=month, product="LST", suffix="")
+        output_dir = args.get("output_dir") or str(out_dir() / dir_name)
+
+        result = gee_download_multi_year_lst(
+            start_year=start_year,
+            end_year=end_year,
+            month=month,
+            output_dir=output_dir,
+            region=region,
+            region_path=args.get("region_path"),
+            scale=int(args.get("scale", 30)),
+            project_id=args.get("project_id"),
+            drive_folder=args.get("drive_folder") or GEE_DRIVE_FOLDER,
+            local_drive_path=args.get("local_drive_path") or str(GDRIVE_SYNC_DIR),
+            download_timeout=int(args.get("download_timeout", 1800)),
+        )
+
+        if result.get("success") and result.get("results"):
+            last = result["results"][-1]
+            if last.get("output_tif") and os.path.exists(last["output_tif"]):
+                runtime.current_dataset = last["output_tif"]
+                runtime.last_tif_output = last["output_tif"]
 
         return result
 
@@ -1220,15 +1460,53 @@ def register_tools(registry: ToolRegistry, runtime: GISRuntime, preferences: Dic
         }, "data"),
 
         ("gee_init", "初始化 Google Earth Engine 认证与项目配置。", {"project_id": "可选，GEE 项目 ID", "force_auth": "是否强制重新认证 true/false"}, "data"),
-        ("gee_download_landsat_sca", "先尝试直接 HTTP 下载；文件太大时自动回退到 Google Drive 导出，并从本地同步目录拿到适合本地 SCA 单通道地表温度反演的 Landsat 8/9 Level-2 三波段数据（red,nir,bt_raw）。若未给日期，默认使用上一个完整自然月。", {
+        ("gee_download_landsat_sca", "从 GEE 下载适合本地 SCA 单通道地表温度反演的 Landsat 8/9 Level-2 三波段数据（red, nir, bt_raw）。先尝试直接 HTTP 下载，文件太大时自动回退 Google Drive 导出。若未给日期，默认上一个完整自然月。适合下载单次/多次场景用于本地反演。", {
             "start_date": "开始日期 YYYY-MM-DD，缺省时默认上一个完整自然月",
             "end_date": "结束日期 YYYY-MM-DD，缺省时默认上一个完整自然月",
             "region": "AOI，可传 [xmin,ymin,xmax,ymax] 或 GeoJSON Feature",
             "region_path": "可选，本地 GeoJSON 文件路径",
             "scale": "导出分辨率，默认30",
-            "cloud_pct": "最大云量百分比，默认20",
-            "reducer": "median/mean/mosaic/first",
+            "cloud_pct": "最大云量百分比，默认30",
+            "reducer": "median/mean/mosaic/first，默认 median",
             "mask_clouds": "是否在 GEE 端像素级去云（QA_PIXEL），默认 true",
+            "project_id": "可选，GEE 项目 ID",
+            "drive_folder": "Google Drive 导出文件夹名，默认 GEE_Exports",
+            "local_drive_path": "本地 Google Drive 同步目录，默认读 config.GDRIVE_SYNC_DIR",
+            "download_timeout": "等待下载/导出/同步的超时秒数，默认 1800",
+        }, "data"),
+
+        ("gee_download_monthly_lst", "月度 LST 智能合成（分级降级）。自动选取当月最优 Landsat 8/9 场景，逐景 SCA 单通道反演后合成，输出单波段 LST（°C）。降级策略：云<15%≥3景均值→云<20%≥2景均值→云<25%≥2景中值→云<40%单景→全部去云中值。返回质量等级（A+~C）。若未给日期，默认上一个完整自然月。", {
+            "start_date": "开始日期 YYYY-MM-DD，缺省时默认上一个完整自然月",
+            "end_date": "结束日期 YYYY-MM-DD，缺省时默认上一个完整自然月",
+            "region": "AOI，可传 [xmin,ymin,xmax,ymax] 或 GeoJSON Feature",
+            "region_path": "可选，本地 GeoJSON 文件路径",
+            "scale": "导出分辨率，默认30",
+            "project_id": "可选，GEE 项目 ID",
+            "drive_folder": "Google Drive 导出文件夹名，默认 GEE_Exports",
+            "local_drive_path": "本地 Google Drive 同步目录，默认读 config.GDRIVE_SYNC_DIR",
+            "download_timeout": "等待下载/导出/同步的超时秒数，默认 1800",
+        }, "data"),
+
+        ("gee_download_yearly_lst", "批量下载全年 12 个月的月度 LST。在 GEE 云端逐月执行分级降级选景 + 逐景 SCA 反演，输出 12 个单波段 LST GeoTIFF（°C）。需要先用 resolve_admin_region 设置研究区。", {
+            "year": "年份，如 2025",
+            "output_dir": "输出目录，存放 12 个月的 TIF 文件",
+            "region": "AOI，可传 [xmin,ymin,xmax,ymax] 或 GeoJSON Feature",
+            "region_path": "可选，本地 GeoJSON 文件路径",
+            "scale": "导出分辨率，默认30",
+            "project_id": "可选，GEE 项目 ID",
+            "drive_folder": "Google Drive 导出文件夹名，默认 GEE_Exports",
+            "local_drive_path": "本地 Google Drive 同步目录，默认读 config.GDRIVE_SYNC_DIR",
+            "download_timeout": "等待下载/导出/同步的超时秒数，默认 1800",
+        }, "data"),
+
+        ("gee_download_multi_year_lst", "跨多年单月 LST 批量反演。对指定年份范围内每一年的同一月份，执行分级降级选景 + 逐景 SCA 反演，输出 N 个单波段 LST TIF（°C）。典型用法：'2020-2025年每年8月的地表温度'。需要先用 resolve_admin_region 设置研究区。", {
+            "start_year": "起始年份，如 2020",
+            "end_year": "结束年份，如 2025",
+            "month": "月份 1-12，如 8 表示每年8月",
+            "output_dir": "输出目录，存放各年的 TIF 文件",
+            "region": "AOI，可传 [xmin,ymin,xmax,ymax] 或 GeoJSON Feature",
+            "region_path": "可选，本地 GeoJSON 文件路径",
+            "scale": "导出分辨率，默认30",
             "project_id": "可选，GEE 项目 ID",
             "drive_folder": "Google Drive 导出文件夹名，默认 GEE_Exports",
             "local_drive_path": "本地 Google Drive 同步目录，默认读 config.GDRIVE_SYNC_DIR",
@@ -1401,6 +1679,9 @@ def register_tools(registry: ToolRegistry, runtime: GISRuntime, preferences: Dic
         "resolve_admin_region": resolve_admin_region_tool,
         "gee_init": gee_init_tool,
         "gee_download_landsat_sca": gee_download_landsat_sca_tool,
+        "gee_download_monthly_lst": gee_download_monthly_lst_tool,
+        "gee_download_yearly_lst": gee_download_yearly_lst_tool,
+        "gee_download_multi_year_lst": gee_download_multi_year_lst_tool,
         # ── 新增 ──
         "gee_lst_timelapse": gee_lst_timelapse_tool,
         "gee_lst_split_panel": gee_lst_split_panel_tool,

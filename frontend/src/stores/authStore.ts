@@ -1,44 +1,70 @@
 import { create } from 'zustand'
-import type { User } from '../types'
-
-const dummyUser: User = {
-  id: 0,
-  username: 'guest',
-  email: 'guest@opengis.local',
-  credits: 9999,
-  created_at: new Date().toISOString(),
-}
+import { authService } from '../services/auth'
+import type { User, LoginRequest, RegisterRequest } from '../types'
 
 interface AuthState {
   user: User | null
   token: string | null
   isLoading: boolean
   error: string | null
-  login: () => Promise<void>
-  register: () => Promise<void>
+  login: (data: LoginRequest) => Promise<boolean>
+  register: (data: RegisterRequest) => Promise<boolean>
   logout: () => void
   fetchUser: () => Promise<void>
 }
 
-export const useAuthStore = create<AuthState>((set) => ({
-  user: dummyUser,
-  token: 'dummy-token',
+export const useAuthStore = create<AuthState>((set, get) => ({
+  user: null,
+  token: localStorage.getItem('token'),
   isLoading: false,
   error: null,
 
-  login: async () => {
-    set({ user: dummyUser, token: 'dummy-token' })
+  login: async (data: LoginRequest) => {
+    set({ isLoading: true, error: null })
+    try {
+      const res = await authService.login(data)
+      const token = res.access_token
+      localStorage.setItem('token', token)
+      set({ token })
+      // 获取用户信息
+      const user = await authService.getMe()
+      set({ user, isLoading: false })
+      return true
+    } catch (err: any) {
+      const msg = err.response?.data?.detail || '登录失败'
+      set({ error: msg, isLoading: false })
+      return false
+    }
   },
 
-  register: async () => {
-    set({ user: dummyUser, token: 'dummy-token' })
+  register: async (data: RegisterRequest) => {
+    set({ isLoading: true, error: null })
+    try {
+      await authService.register(data)
+      set({ isLoading: false })
+      return true
+    } catch (err: any) {
+      const msg = err.response?.data?.detail || '注册失败'
+      set({ error: msg, isLoading: false })
+      return false
+    }
   },
 
   logout: () => {
-    set({ user: dummyUser, token: 'dummy-token' })
+    localStorage.removeItem('token')
+    set({ user: null, token: null, error: null })
   },
 
   fetchUser: async () => {
-    set({ user: dummyUser })
+    const token = get().token
+    if (!token) return
+    try {
+      const user = await authService.getMe()
+      set({ user })
+    } catch {
+      // token 无效
+      localStorage.removeItem('token')
+      set({ user: null, token: null })
+    }
   },
 }))

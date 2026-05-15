@@ -239,9 +239,7 @@ def _collect_search_roots() -> List[str]:
         os.path.join(home, "workspace", "data"),
     ])
 
-    # 4. 系统级目录
-    roots.extend(["/data", "/tmp", "/opt/data"])
-
+    # 4. 项目配置中的额外路径（不扫描系统目录）
     # 去重并过滤不存在的
     seen = set()
     valid = []

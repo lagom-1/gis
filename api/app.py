@@ -73,12 +73,14 @@ app.add_middleware(
 async def global_exception_handler(request: Request, exc: Exception):
     """捕获所有未处理的异常，返回统一错误格式"""
     logger.error(f"未处理的异常: {exc}", exc_info=True)
+    import os
+    debug = os.getenv("DEBUG", "false").lower() == "true"
     return JSONResponse(
         status_code=500,
         content={
             "success": False,
             "message": "服务器内部错误",
-            "detail": str(exc) if config.SECRET_KEY == "opengis-dev-secret-key-change-in-production" else "请联系管理员",
+            "detail": str(exc) if debug else "请联系管理员",
         },
     )
 

@@ -10,6 +10,10 @@ from typing import Any, Dict, List, Optional
 
 from config import RASTER_EXTS, default_search_roots
 
+# 搜索限制
+MAX_WALK_DEPTH = 6  # 最大目录深度
+MIN_TOKEN_LENGTH = 2  # 最小 token 长度
+
 
 def find_local_files(
     query: str,
@@ -31,12 +35,30 @@ def find_local_files(
     ext_filter = {e.lower() if e.startswith(".") else f".{e.lower()}" for e in (extensions or [])}
 
     results: List[Dict[str, Any]] = []
-    query_tokens = [t for t in query.replace("_", " ").replace("-", " ").split() if t]
+    # 过滤掉过短的 token（至少 2 个字符）
+    query_tokens = [
+        t for t in query.replace("_", " ").replace("-", " ").split()
+        if t and len(t) >= MIN_TOKEN_LENGTH
+    ]
 
     for root in roots:
         if not os.path.exists(root):
             continue
-        for dirpath, _, filenames in os.walk(root):
+        root_depth = root.count(os.sep)
+        for dirpath, dirnames, filenames in os.walk(root):
+            # 限制搜索深度
+            current_depth = dirpath.count(os.sep) - root_depth
+            if current_depth >= MAX_WALK_DEPTH:
+                dirnames.clear()  # 不再深入
+                continue
+            # 跳过隐藏目录和常见无关目录
+            dirnames[:] = [
+                d for d in dirnames
+                if not d.startswith('.') and d not in {
+                    'node_modules', '__pycache__', '.git', '.venv',
+                    'venv', 'env', '.idea', '.vscode',
+                }
+            ]
             for name in filenames:
                 ext = os.path.splitext(name)[1].lower()
                 if ext_filter and ext not in ext_filter:
@@ -59,12 +81,16 @@ def find_local_files(
                 except OSError:
                     size_bytes = 0
                     mtime = 0
+                # 评分：精确匹配 > token 匹配 > 栅格文件 > 路径深度浅
                 score = 0
                 if query and hay == query:
                     score += 100
                 score += sum(10 for tok in query_tokens if tok in hay)
                 if ext in RASTER_EXTS:
                     score += 5
+                # 路径越浅得分越高（惩罚深层嵌套）
+                path_depth = dirpath.count(os.sep) - root_depth
+                score -= path_depth * 2
                 results.append({
                     "name": name,
                     "path": path,

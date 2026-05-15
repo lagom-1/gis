@@ -20,6 +20,13 @@ export default function TaskPage() {
     }
   }, [id, fetchTask])
 
+  // 离开任务详情页时清理 currentTask，防止泄漏到工作区
+  useEffect(() => {
+    return () => {
+      useTaskStore.setState({ currentTask: null })
+    }
+  }, [])
+
   useEffect(() => {
     if (currentTask?.status === 'running' || currentTask?.status === 'pending') {
       const interval = setInterval(() => {

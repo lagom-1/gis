@@ -22,12 +22,11 @@ from api.models import (
     TaskListResponse,
     TaskResponse,
     TaskStatus,
+    User,
 )
+from api.routers.auth import get_current_user
 
 logger = logging.getLogger(__name__)
-
-# 默认用户 ID，无需认证
-DEFAULT_USER_ID = 1
 
 # 全局线程池（限制并发任务数，避免资源竞争）
 from concurrent.futures import ThreadPoolExecutor
@@ -46,6 +45,7 @@ router = APIRouter(prefix="/api/tasks", tags=["任务"])
 async def create_task(
     request: TaskCreateRequest,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
     提交新的 GIS 分析任务。
@@ -62,9 +62,9 @@ async def create_task(
             detail="已有 2 个任务正在运行，请稍后再试",
         )
 
-    # 创建数据库记录
+    # 创建数据库记录（状态保持 PENDING，线程启动后才改为 RUNNING）
     task = Task(
-        user_id=DEFAULT_USER_ID,
+        user_id=current_user.id,
         input_text=request.input_text,
         status=TaskStatus.PENDING,
     )
@@ -74,20 +74,16 @@ async def create_task(
 
     task_id = task.id
 
-    # 更新为运行中
-    task.status = TaskStatus.RUNNING
-    db.commit()
-
-    # 在后台线程中执行任务（不依赖请求的 db 会话）
-    from api.tasks_worker import run_gis_task
+    # 在后台线程中执行任务
+    from api.tasks_worker import run_gis_task, _update_task_status
 
     def run_sync():
+        # 线程实际开始执行时才改为 RUNNING
+        _update_task_status(task_id, "running")
         try:
             run_gis_task(task_id, request.input_text)
         except Exception as e:
             logger.error(f"任务 {task_id} 执行异常: {e}", exc_info=True)
-            # 使用独立会话更新状态
-            from api.tasks_worker import _update_task_status
             _update_task_status(task_id, "failed", error_message=f"执行异常: {e}")
 
     future = _task_executor.submit(run_sync)
@@ -95,19 +91,13 @@ async def create_task(
     with _futures_lock:
         _running_futures[task_id] = future
 
-    # 超时监控（10 分钟）
-    def _check_timeout():
-        try:
-            future.result(timeout=600)
-        except Exception:
-            from api.tasks_worker import _update_task_status
-            _update_task_status(task_id, "failed", error_message="任务超时（10分钟），请重新提交")
-            logger.warning(f"任务 {task_id} 超时")
-        finally:
-            with _futures_lock:
-                _running_futures.pop(task_id, None)
+    # 清理完成的 future（不设置超时，让任务自然完成）
+    def _cleanup_when_done():
+        future.result()  # 等待任务自然结束，不设超时
+        with _futures_lock:
+            _running_futures.pop(task_id, None)
 
-    threading.Thread(target=_check_timeout, daemon=True).start()
+    threading.Thread(target=_cleanup_when_done, daemon=True).start()
 
     db.refresh(task)
     return task
@@ -119,9 +109,10 @@ async def list_tasks(
     page_size: int = Query(20, ge=1, le=100, description="每页数量"),
     status_filter: Optional[TaskStatus] = Query(None, alias="status", description="按状态筛选"),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """获取当前用户的任务列表，支持分页和状态筛选。"""
-    query = db.query(Task).filter(Task.user_id == DEFAULT_USER_ID)
+    query = db.query(Task).filter(Task.user_id == current_user.id)
 
     if status_filter:
         query = query.filter(Task.status == status_filter)
@@ -147,9 +138,10 @@ async def list_tasks(
 async def get_task(
     task_id: int,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """获取指定任务的详细信息，包括状态、输出文件和错误信息。"""
-    task = db.query(Task).filter(Task.id == task_id, Task.user_id == DEFAULT_USER_ID).first()
+    task = db.query(Task).filter(Task.id == task_id, Task.user_id == current_user.id).first()
     if task is None:
         raise HTTPException(status_code=404, detail="任务不存在")
 
@@ -160,9 +152,10 @@ async def get_task(
 async def cancel_task(
     task_id: int,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """取消一个待执行或正在运行的任务。已完成的任务无法取消。"""
-    task = db.query(Task).filter(Task.id == task_id, Task.user_id == DEFAULT_USER_ID).first()
+    task = db.query(Task).filter(Task.id == task_id, Task.user_id == current_user.id).first()
     if task is None:
         raise HTTPException(status_code=404, detail="任务不存在")
 

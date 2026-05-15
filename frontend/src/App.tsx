@@ -1,4 +1,6 @@
+import { useEffect } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
+import { useAuthStore } from './stores/authStore'
 import Layout from './components/Layout'
 import Home from './pages/Home'
 import Login from './pages/Login'
@@ -10,6 +12,15 @@ import Profile from './pages/Profile'
 import Workspace from './pages/Workspace'
 
 export default function App() {
+  const { token, fetchUser } = useAuthStore()
+
+  // 应用启动时尝试恢复用户会话
+  useEffect(() => {
+    if (token) {
+      fetchUser()
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
   return (
     <Routes>
       <Route path="/" element={<Layout />}>

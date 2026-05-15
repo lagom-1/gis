@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { persist } from 'zustand/middleware'
 
 export interface Message {
   id: string
@@ -51,52 +52,75 @@ const initialState = {
   sidebarCollapsed: false,
 }
 
-export const useWorkspaceStore = create<WorkspaceState>()((set) => ({
-  ...initialState,
+export const useWorkspaceStore = create<WorkspaceState>()(
+  persist(
+    (set) => ({
+      ...initialState,
 
-  addMessage: (message) => {
-    const newMessage: Message = {
-      ...message,
-      id: Date.now().toString(),
-      timestamp: new Date().toISOString(),
-    }
-    set((state) => ({
-      messages: [...state.messages, newMessage],
-    }))
-  },
+      addMessage: (message) => {
+        const newMessage: Message = {
+          ...message,
+          id: Date.now().toString(),
+          timestamp: new Date().toISOString(),
+        }
+        set((state) => ({
+          messages: [...state.messages, newMessage],
+        }))
+      },
 
-  loadProjectMessages: (msgs) => {
-    const loaded: Message[] = msgs.map((m, i) => ({
-      id: `loaded-${i}`,
-      role: m.role as 'user' | 'assistant',
-      content: m.content,
-      timestamp: m.timestamp,
-      taskId: m.task_id,
-    }))
-    set({ messages: [SYSTEM_MESSAGE, ...loaded] })
-  },
+      loadProjectMessages: (msgs) => {
+        const loaded: Message[] = msgs.map((m, i) => ({
+          id: `loaded-${i}`,
+          role: m.role as 'user' | 'assistant',
+          content: m.content,
+          timestamp: m.timestamp,
+          taskId: m.task_id,
+        }))
+        set({ messages: [SYSTEM_MESSAGE, ...loaded] })
+      },
 
-  clearMessages: () => {
-    set({ messages: [SYSTEM_MESSAGE] })
-  },
+      clearMessages: () => {
+        set({ messages: [SYSTEM_MESSAGE] })
+      },
 
-  setCurrentOutput: (files) => {
-    set((state) => {
-      const newPrevious = state.currentOutput.length > 0 ? state.currentOutput : state.previousOutput
-      return {
-        currentOutput: files,
-        previousOutput: newPrevious,
-        showComparison: newPrevious.length > 0 && files.length > 0,
-      }
-    })
-  },
+      setCurrentOutput: (files) => {
+        set((state) => {
+          const newPrevious = state.currentOutput.length > 0 ? state.currentOutput : state.previousOutput
+          return {
+            currentOutput: files,
+            previousOutput: newPrevious,
+            showComparison: newPrevious.length > 0 && files.length > 0,
+          }
+        })
+      },
 
-  setPreviousOutput: (files) => set({ previousOutput: files }),
-  setPreviewFile: (file) => set({ previewFile: file }),
-  setShowComparison: (show) => set({ showComparison: show }),
-  setSidebarCollapsed: (collapsed) => set({ sidebarCollapsed: collapsed }),
+      setPreviousOutput: (files) => set({ previousOutput: files }),
+      setPreviewFile: (file) => set({ previewFile: file }),
+      setShowComparison: (show) => set({ showComparison: show }),
+      setSidebarCollapsed: (collapsed) => set({ sidebarCollapsed: collapsed }),
 
-  reset: () => {
-    set(initialState)
-  },
-}))
+      reset: () => {
+        set(initialState)
+      },
+    }),
+    {
+      name: 'opengis-workspace',
+      partialize: (state) => ({
+        messages: state.messages,
+        currentOutput: state.currentOutput,
+        previousOutput: state.previousOutput,
+      }),
+      merge: (persisted, current) => ({
+        ...current,
+        ...(persisted as Partial<WorkspaceState>),
+        // 确保系统消息始终在开头，且时间戳刷新
+        messages: (persisted as Partial<WorkspaceState>).messages?.length
+          ? [
+              { ...SYSTEM_MESSAGE, timestamp: new Date().toISOString() },
+              ...(persisted as Partial<WorkspaceState>).messages!.filter(m => m.role !== 'system'),
+            ]
+          : current.messages,
+      }),
+    },
+  ),
+)

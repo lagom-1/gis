@@ -122,7 +122,9 @@ def _execute_gis_task(task_id: int, input_text: str, celery_task_id: str = None)
     import config as app_config
     task_start_timestamp = time.time()
 
-    _update_task_status(task_id, "running", celery_task_id=celery_task_id)
+    # 注意：running 状态由调用方设置（tasks.py 的线程函数或 Celery task）
+    if celery_task_id:
+        _update_task_status(task_id, "running", celery_task_id=celery_task_id)
 
     # 使用输出目录（加锁避免竞争）
     output_dir = _setup_task_output_dir()
@@ -198,10 +200,11 @@ if HAS_CELERY:
         result = _execute_gis_task(task_id, input_text, celery_task_id=self.request.id)
 
         if not result.get("success"):
-            exc = Exception(result.get("error", "未知错误"))
-            if isinstance(exc, (ConnectionError, TimeoutError)):
+            error_msg = result.get("error", "未知错误")
+            # 检查是否为可重试的网络/超时错误
+            if any(err_type in error_msg for err_type in ("ConnectionError", "TimeoutError", "ConnectTimeout", "Max retries")):
                 try:
-                    self.retry(exc=exc)
+                    self.retry(exc=Exception(error_msg))
                 except self.MaxRetriesExceededError:
                     logger.error(f"任务 {task_id} 达到最大重试次数")
 

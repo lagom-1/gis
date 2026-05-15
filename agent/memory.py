@@ -95,11 +95,27 @@ class MemoryStore:
         self._save_json(self.preferences_path, self.preferences)
 
     def start_new_task(self, goal: str) -> None:
+        """
+        开始新任务时重置任务级状态。
+
+        修复：跨任务状态污染问题 - current_dataset 和 source_dataset
+        必须在新任务开始时清空，防止前一个任务的数据集泄漏到新任务。
+        product_type 和 current_output 也属于任务级状态，需要重置。
+        known_facts 包含上一个任务的检查摘要，也需要清空。
+        map_style 保留，因为它是用户的视觉偏好，跨任务应继承。
+        """
         self.session.task_id = uuid.uuid4().hex[:12]
         self.session.goal = goal
         self.session.active_plan = []
         self.session.completed_steps = []
         self.session.recent_events = []
+        # 重置任务级状态，防止跨任务污染
+        self.session.current_dataset = None
+        self.session.source_dataset = None
+        self.session.product_type = None
+        self.session.current_output = None
+        self.session.known_facts = {}
+        # map_style 保留 - 属于用户视觉偏好，跨任务继承
         self.save()
 
     def append_event(self, step: int, tool: str, args: Dict[str, Any], result: Dict[str, Any], reason: str = "") -> None:

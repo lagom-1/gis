@@ -60,7 +60,10 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
 
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-security_scheme = HTTPBearer()
+security_scheme = HTTPBearer(auto_error=False)
+
+# 默认用户 ID（无认证时使用，开发模式）
+DEFAULT_USER_ID = 1
 
 
 async def _get_current_user(
@@ -87,6 +90,42 @@ async def _get_current_user(
     if user is None:
         raise credentials_exception
     return user
+
+
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security_scheme),
+    db: Session = Depends(get_db),
+) -> User:
+    """可选认证：有 token 时解析，无 token 时返回默认用户（开发模式）"""
+    if credentials is None:
+        user = db.query(User).filter(User.id == DEFAULT_USER_ID).first()
+        if user is None:
+            # 自动创建默认用户
+            user = User(
+                id=DEFAULT_USER_ID,
+                username="default",
+                email="default@opengis.local",
+                password_hash="no-login",
+                credits=99999,
+            )
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+        return user
+
+    try:
+        payload = jwt.decode(credentials.credentials, config.SECRET_KEY, algorithms=[config.JWT_ALGORITHM])
+        user_id_str = payload.get("sub")
+        if user_id_str:
+            user = db.query(User).filter(User.id == int(user_id_str)).first()
+            if user:
+                return user
+    except (JWTError, ValueError):
+        pass
+
+    # token 无效时回退到默认用户
+    user = db.query(User).filter(User.id == DEFAULT_USER_ID).first()
+    return user or User(id=DEFAULT_USER_ID, username="default", email="default@opengis.local", password_hash="no-login", credits=99999)
 
 
 # ── 端点 ──────────────────────────────────────────────────

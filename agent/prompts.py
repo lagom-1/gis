@@ -51,6 +51,7 @@ DECISION_SYSTEM_PROMPT = """
 - 若用户给了配色/标题/图例等样式要求，可以在 make_thematic_map 之后的新一轮指令中再调整；
   同一轮里如果已经完成一次 set_map_style + make_thematic_map，必须立即 final。
 - 只有用户单纯问"初始化 GEE / 认证 GEE / 登录 Earth Engine"时，才单独调用 gee_init。
+- 月度 LST 合成（双星协同）：当用户说"反演某月地表温度"、"某月LST"、"月度温度"时，使用 gee_download_monthly_lst（不是 gee_download_landsat_sca）。日期范围应设为该月完整区间（如 2024-07-01 到 2024-07-31），该工具会自动从该月 Landsat 8+9 场景中选取云量<15%、月份内均匀分布（上中下旬各 1 景）的 2-3 景，对每景独立执行 SCA 单通道反演，再逐像元取均值。输出已经是 LST（°C），无需再调用 run_lst，可直接 make_thematic_map 制图。如果用户只说"7月"没给年份，默认上一年该月。
 
 ### 中国行政区名称研究区直通流程（新增，优先级与 bbox/GEE 直通同级，绝对不可跳过！）
 - 当用户使用中国行政区名称作为研究区，并且意图是 **从 GEE / Earth Engine / Landsat 下载遥感影像**、或做**地表温度反演 / 单通道反演 / LST** 时，必须优先走"行政区解析 → GEE 下载"流程。
@@ -327,6 +328,23 @@ DECISION_SYSTEM_PROMPT = """
 3. make_thematic_map → 生成标准专题图
 4. set_map_style + make_thematic_map → 用户调整样式后重新出图
 5. export_result → 导出最终结果
+
+### 完整Pipeline（月度 LST 合成 — Landsat 8+9 双星协同）
+1. resolve_admin_region → 解析行政区边界（如"温江区"）
+2. gee_download_monthly_lst(start_date="2024-07-01", end_date="2024-07-31") → 选取该月云量<15%、均匀分布的 2-3 景，逐景 SCA 反演后均值合成，输出 LST（°C）
+3. make_thematic_map → 生成专题图（输出已是 LST，无需 run_lst）
+4. set_map_style + make_thematic_map → 用户调整样式后重新出图（可选）
+5. export_result → 导出最终结果（可选）
+
+### 完整Pipeline（全年 12 个月 LST 批量反演）
+1. resolve_admin_region → 解析行政区边界（如"旺苍县"）
+2. gee_download_yearly_lst(year=2025) → 云端逐月执行分级降级选景 + 逐景 SCA 反演，输出 12 个单波段 LST TIF
+3. 返回 final，告知用户输出目录和各月质量等级
+
+### 完整Pipeline（跨多年单月 LST 批量反演）
+1. resolve_admin_region → 解析行政区边界（如"旺苍县"）
+2. gee_download_multi_year_lst(start_year=2020, end_year=2025, month=8) → 云端逐年8月执行分级降级选景 + 逐景 SCA 反演，输出 6 个单波段 LST TIF
+3. 返回 final，告知用户输出目录和各年质量等级
 
 ### 完整Pipeline（中国行政区名称 -> GEE -> 单通道温度反演）
 1. resolve_admin_region → 根据"广元市 / 旺苍县 / 广元市旺苍县"等名称自动匹配本地行政边界

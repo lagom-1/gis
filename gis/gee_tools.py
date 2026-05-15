@@ -19,6 +19,46 @@ def _ensure_parent(path: str) -> None:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
 
 
+def _save_preview_png(tif_path: str) -> str:
+    """从单波段 TIF 生成同名 PNG 预览图，返回 png 路径"""
+    import numpy as np
+    import rasterio
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    png_path = os.path.splitext(tif_path)[0] + ".png"
+    if os.path.exists(png_path):
+        return png_path
+
+    try:
+        with rasterio.open(tif_path) as src:
+            data = src.read(1).astype("float32")
+            if src.nodata is not None:
+                data = np.where(data == src.nodata, np.nan, data)
+            data = np.where(data == 0, np.nan, data)
+
+        valid = np.isfinite(data)
+        if not valid.any():
+            return ""
+
+        vmin = float(np.nanpercentile(data, 2))
+        vmax = float(np.nanpercentile(data, 98))
+        if vmin == vmax:
+            vmax = vmin + 1
+
+        fig, ax = plt.subplots(figsize=(10, 8))
+        ax.imshow(data, cmap="coolwarm", vmin=vmin, vmax=vmax)
+        ax.axis("off")
+        plt.colorbar(ax.images[0], ax=ax, fraction=0.046, pad=0.04)
+        plt.tight_layout()
+        plt.savefig(png_path, dpi=150, bbox_inches="tight")
+        plt.close()
+        return png_path
+    except Exception:
+        return ""
+
+
 def _load_geojson(path: str) -> Dict[str, Any]:
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
@@ -120,10 +160,15 @@ def _mask_clouds_qa(image: ee.Image) -> ee.Image:
     return image.updateMask(mask)
 
 
-def _landsat89_l2_collection(region_geom, start_date: str, end_date: str, cloud_pct: float = 30):
+def _landsat89_l2_collection(region_geom, start_date: str, end_date: str, cloud_pct: float = 15, hard_filter: bool = True, max_scenes: int | None = None, distribute_periods: int | None = None):
     """
     合并 Landsat 8/9 Collection 2 Level-2 Tier 1。
-    不硬性过滤云量，而是按云量排序取最优影像。
+
+    Args:
+        hard_filter: True 时硬性过滤云量 <= cloud_pct；False 时按云量排序取前 N 景
+        max_scenes: 场景上限，None 时 hard_filter=True 不限、hard_filter=False 取 20
+        distribute_periods: 若指定，将日期范围等分为 N 段，每段取云量最少的 1 景，
+            确保所选场景在时间上均匀分布（适合月度合成）
     """
     col8 = (
         ee.ImageCollection("LANDSAT/LC08/C02/T1_L2")
@@ -137,9 +182,37 @@ def _landsat89_l2_collection(region_geom, start_date: str, end_date: str, cloud_
     )
     merged = col8.merge(col9)
 
-    # 按云量升序排序，取前 20 景最优影像
-    # 这样即使没有低于 cloud_pct 的影像，也能取到最好的
-    merged = merged.sort("CLOUD_COVER").limit(20)
+    if distribute_periods and distribute_periods > 0:
+        # 月份内均匀分布选景：等分时间段，每段取云量最少的 1 景
+        from datetime import datetime, timedelta
+        sd = datetime.strptime(start_date, "%Y-%m-%d")
+        ed = datetime.strptime(end_date, "%Y-%m-%d")
+        total_days = (ed - sd).days + 1
+        period_days = max(total_days // distribute_periods, 1)
+
+        selected = []
+        for i in range(distribute_periods):
+            p_start = sd + timedelta(days=i * period_days)
+            p_end = p_start + timedelta(days=period_days - 1)
+            if i == distribute_periods - 1:
+                p_end = ed  # 最后一段包含末尾
+            sub_col = merged.filterDate(p_start.strftime("%Y-%m-%d"), (p_end + timedelta(days=1)).strftime("%Y-%m-%d"))
+            sub_col = sub_col.filter(ee.Filter.lte("CLOUD_COVER", cloud_pct))
+            # 每段取云量最少的 1 景
+            best = sub_col.sort("CLOUD_COVER").limit(1)
+            selected.append(best)
+
+        # 合并各段选出的影像
+        result = selected[0]
+        for c in selected[1:]:
+            result = result.merge(c)
+        return result
+
+    if hard_filter:
+        merged = merged.filter(ee.Filter.lte("CLOUD_COVER", cloud_pct))
+    else:
+        limit = max_scenes if max_scenes is not None else 20
+        merged = merged.sort("CLOUD_COVER").limit(limit)
 
     return merged
 
@@ -263,6 +336,51 @@ def _download_direct(
             "too_large": too_large,
             "message": f"直接下载失败: {err}",
         }
+
+
+def _wait_drive_file(
+    export_img: ee.Image,
+    task_name: str,
+    folder: str,
+    scale: int,
+    geom,
+    sync_dir: str,
+    timeout_sec: int = 900,
+) -> Optional[str]:
+    """导出到 Google Drive，等待完成，从本地同步目录获取文件路径。"""
+    task = ee.batch.Export.image.toDrive(
+        image=export_img,
+        description=task_name,
+        folder=folder,
+        fileNamePrefix=task_name,
+        scale=scale,
+        region=geom,
+        crs="EPSG:4326",
+        maxPixels=1e13,
+        fileFormat="GeoTIFF",
+        formatOptions={"noData": 0},
+    )
+    task.start()
+    task_id = task.id
+    print(f"[GEE] Drive 导出任务已启动: {task_name} (id={task_id})")
+
+    task_result = _wait_for_drive_task(task_id, timeout_sec=timeout_sec)
+    if not task_result.get("success"):
+        print(f"[GEE] Drive 导出失败: {task_result.get('message')}")
+        return None
+
+    print(f"[GEE] Drive 导出完成，正在本地同步目录查找 {task_name}*.tif...")
+    elapsed = 0
+    while elapsed < timeout_sec:
+        local_path = _find_drive_file(task_name, folder, local_drive_path=sync_dir)
+        if local_path:
+            print(f"[GEE] 在本地同步目录找到: {local_path}")
+            return local_path
+        time.sleep(5)
+        elapsed += 5
+
+    print(f"[GEE] 在本地同步目录未找到 {task_name}*.tif")
+    return None
 
 
 def _export_to_drive(export_img: ee.Image, task_name: str, folder: str, scale: int, geom) -> ee.batch.Task:
@@ -554,10 +672,14 @@ def gee_download_landsat_sca(
                 "message": "下载得到的 tif 无效或文件过小",
             }
 
+        # 同时生成 PNG 预览图
+        preview_png = _save_preview_png(output_tif)
+
         return {
             "success": True,
             "message": f"GEE Landsat SCA 数据下载完成: {Path(output_tif).name}（{count} 景影像合成）",
             "output_tif": output_tif,
+            "output_png": preview_png or None,
             "path": output_tif,
             "selected_path": output_tif,
             "bands": ["red", "nir", "bt_raw"],
@@ -589,6 +711,704 @@ def gee_download_landsat_sca(
 
     except Exception as e:
         return {"success": False, "message": f"GEE Landsat 下载失败: {e}"}
+
+
+def gee_download_monthly_lst(
+    start_date: str,
+    end_date: str,
+    output_tif: str,
+    region: Any = None,
+    region_path: Optional[str] = None,
+    scale: int = 30,
+    project_id: Optional[str] = None,
+    drive_folder: str = "",
+    local_drive_path: Optional[str] = None,
+    download_timeout: int = 900,
+) -> Dict[str, Any]:
+    """
+    月度 LST 智能合成（分级降级策略）。
+
+    自动选择最优方案：
+      Level 1: 云<15%, ≥3景 → 分布均匀, 逐景SCA反演 → 均值  质量 A+
+      Level 2: 云<20%, ≥2景 → 分布均匀, 逐景SCA反演 → 均值  质量 A
+      Level 3: 云<25%, ≥2景 → 逐景SCA反演 → 中值             质量 B+
+      Level 4: 云<40%, ≥1景 → 单景SCA反演                    质量 B-
+      Level 5: 全部可用     → 逐景SCA反演 → 中值             质量 C
+
+    输出：单波段 LST GeoTIFF（°C）
+    """
+    from gis.gee_timelapse import _compute_lst_gee
+
+    init_result = init_gee(project_id=project_id)
+    if not init_result.get("success"):
+        return init_result
+
+    try:
+        try:
+            geom = _normalize_region(region=region, region_path=region_path)
+        except Exception as e:
+            return {
+                "success": False,
+                "message": f"AOI 解析失败: {e}",
+                "region_type": type(region).__name__ if region is not None else None,
+                "region_path": region_path,
+            }
+
+        _ensure_parent(output_tif)
+
+        folder_name = (drive_folder or GEE_DRIVE_FOLDER).strip() or GEE_DRIVE_FOLDER
+        sync_dir = local_drive_path or str(GDRIVE_SYNC_DIR)
+
+        # ── 0. 获取整月所有 L8+L9 场景 ─────────────────────
+        col8 = (
+            ee.ImageCollection("LANDSAT/LC08/C02/T1_L2")
+            .filterBounds(geom)
+            .filterDate(start_date, end_date)
+        )
+        col9 = (
+            ee.ImageCollection("LANDSAT/LC09/C02/T1_L2")
+            .filterBounds(geom)
+            .filterDate(start_date, end_date)
+        )
+        all_scenes = col8.merge(col9)
+        total_count = all_scenes.size().getInfo()
+
+        if total_count == 0:
+            return {
+                "success": False,
+                "message": f"未找到 {start_date}~{end_date} 内的任何 Landsat 8/9 影像。",
+            }
+
+        # ── 1. 分级降级选景 ────────────────────────────────
+        # 每级：(云量阈值, 最小场景数, 是否均匀分布, 合成方法, 质量等级)
+        levels = [
+            (15, 3, True,  "mean",    "A+"),   # Level 1: 理想
+            (20, 2, True,  "mean",    "A"),     # Level 2: 次优
+            (25, 2, False, "median",  "B+"),    # Level 3: 降级
+            (40, 1, False, "single",  "B-"),    # Level 4: 单景
+            (100, 1, False, "median", "C"),      # Level 5: 全部
+        ]
+
+        selected_col = None
+        selected_level = None
+        selected_quality = None
+        selected_method = None
+        selected_count = 0
+
+        for cloud_thresh, min_scenes, distributed, method, quality in levels:
+            filtered = all_scenes.filter(ee.Filter.lte("CLOUD_COVER", cloud_thresh))
+            cnt = filtered.size().getInfo()
+
+            if cnt < min_scenes:
+                continue
+
+            if distributed and cnt >= 3:
+                # 均匀分布选景：等分月份，每段取云量最少的 1 景
+                from datetime import datetime, timedelta
+                sd = datetime.strptime(start_date, "%Y-%m-%d")
+                ed = datetime.strptime(end_date, "%Y-%m-%d")
+                total_days = (ed - sd).days + 1
+                period_days = max(total_days // 3, 1)
+
+                selected = []
+                for i in range(3):
+                    p_start = sd + timedelta(days=i * period_days)
+                    p_end = p_start + timedelta(days=period_days - 1)
+                    if i == 2:
+                        p_end = ed
+                    sub = filtered.filterDate(
+                        p_start.strftime("%Y-%m-%d"),
+                        (p_end + timedelta(days=1)).strftime("%Y-%m-%d"),
+                    )
+                    best = sub.sort("CLOUD_COVER").limit(1)
+                    selected.append(best)
+
+                merged = selected[0]
+                for c in selected[1:]:
+                    merged = merged.merge(c)
+                actual_cnt = merged.size().getInfo()
+
+                if actual_cnt >= min_scenes:
+                    selected_col = merged
+                    selected_count = actual_cnt
+                else:
+                    # 均匀分布不够，回退到按云量取前 N
+                    selected_col = filtered.sort("CLOUD_COVER").limit(min(cnt, 3))
+                    selected_count = min(cnt, 3)
+            else:
+                # 按云量排序取前 N 景
+                take = min(cnt, 3) if method != "single" else 1
+                selected_col = filtered.sort("CLOUD_COVER").limit(take)
+                selected_count = take
+
+            selected_level = levels.index((cloud_thresh, min_scenes, distributed, method, quality)) + 1
+            selected_quality = quality
+            selected_method = method
+            break
+
+        if selected_col is None:
+            return {
+                "success": False,
+                "message": f"{start_date}~{end_date} 内无可用 Landsat 8/9 影像。",
+            }
+
+        # ── 2. 逐景 QA_PIXEL 去云 + SCA 单通道 LST 反演 ───
+        col_masked = selected_col.map(_mask_clouds_qa)
+        lst_col = col_masked.map(_compute_lst_gee)
+
+        # ── 3. 合成 ───────────────────────────────────────
+        if selected_method == "mean":
+            monthly_lst = lst_col.mean().clip(geom)
+            method_desc = f"逐景SCA反演→均值（{selected_count}景）"
+        elif selected_method == "single":
+            monthly_lst = ee.Image(lst_col.first()).clip(geom)
+            method_desc = "单景SCA反演"
+        else:  # median
+            monthly_lst = lst_col.median().clip(geom)
+            method_desc = f"逐景SCA反演→中值（{selected_count}景）"
+
+        # ── 4. 填补边缘空洞 ────────────────────────────────
+        filled = monthly_lst.focal_mean(radius=1, kernelType="square", units="pixels")
+        monthly_lst = monthly_lst.unmask(filled).clip(geom)
+
+        export_img = monthly_lst.rename("LST")
+
+        import time as _time
+        _ts = int(_time.time()) % 100000
+        task_name = f"gee_monthly_lst_{start_date.replace('-', '')}_{end_date.replace('-', '')}_{_ts}"
+        task_id = None
+        download_source = "unknown"
+
+        # ── 5. 下载 ────────────────────────────────────────
+        direct_result = _download_direct(
+            export_img=export_img,
+            geom=geom,
+            scale=int(scale),
+            output_tif=output_tif,
+            timeout_sec=min(int(download_timeout), 300),
+        )
+
+        result_base = {
+            "output_tif": output_tif,
+            "path": output_tif,
+            "selected_path": output_tif,
+            "bands": ["LST"],
+            "start_date": start_date,
+            "end_date": end_date,
+            "scale": int(scale),
+            "scene_count": selected_count,
+            "total_scenes_in_month": total_count,
+            "quality": selected_quality,
+            "metadata": {
+                "product_type": f"月度 LST 合成 — {method_desc}",
+                "unit": "°C",
+                "gee_source": "LANDSAT/LC08+C09 C02 T1 L2",
+                "method": method_desc,
+                "quality_grade": selected_quality,
+                "level": selected_level,
+                "total_scenes_available": total_count,
+            },
+        }
+
+        if direct_result.get("success"):
+            preview_png = _save_preview_png(output_tif)
+            return {
+                "success": True,
+                "message": f"月度 LST 合成完成 — {method_desc}，质量等级 {selected_quality}（当月共 {total_count} 景，选用 {selected_count} 景）",
+                "download_source": "direct_download",
+                "output_png": preview_png or None,
+                **result_base,
+            }
+
+        # 直接下载失败，回退到 Google Drive
+        local_path = _wait_drive_file(
+            export_img=export_img,
+            task_name=task_name,
+            folder=folder_name,
+            scale=int(scale),
+            geom=geom,
+            sync_dir=sync_dir,
+            timeout_sec=int(download_timeout),
+        )
+        if local_path:
+            _ensure_parent(output_tif)
+            shutil.copy2(local_path, output_tif)
+            preview_png = _save_preview_png(output_tif)
+            return {
+                "success": True,
+                "message": f"月度 LST 合成完成 — {method_desc}，质量等级 {selected_quality}（当月共 {total_count} 景，选用 {selected_count} 景）",
+                "download_source": "drive",
+                "output_png": preview_png or None,
+                **result_base,
+            }
+
+        return {
+            "success": False,
+            "message": f"月度 LST 已导出到 Google Drive，但本地同步目录未找到文件",
+        }
+
+    except Exception as e:
+        return {"success": False, "message": f"月度 LST 合成失败: {e}"}
+
+
+def gee_download_yearly_lst(
+    year: int,
+    output_dir: str,
+    region: Any = None,
+    region_path: Optional[str] = None,
+    scale: int = 30,
+    project_id: Optional[str] = None,
+    drive_folder: str = "",
+    local_drive_path: Optional[str] = None,
+    download_timeout: int = 900,
+) -> Dict[str, Any]:
+    """
+    批量下载全年 12 个月的月度 LST 合成结果。
+
+    对每个月调用 gee_download_monthly_lst 的核心逻辑（分级降级选景 + 逐景 SCA 反演），
+    输出 12 个单波段 LST GeoTIFF（°C），文件名格式：{year}_{month:02d}_lst.tif
+    """
+    from gis.gee_timelapse import _compute_lst_gee
+    import calendar
+
+    init_result = init_gee(project_id=project_id)
+    if not init_result.get("success"):
+        return init_result
+
+    try:
+        try:
+            geom = _normalize_region(region=region, region_path=region_path)
+        except Exception as e:
+            return {
+                "success": False,
+                "message": f"AOI 解析失败: {e}",
+            }
+
+        os.makedirs(output_dir, exist_ok=True)
+
+        folder_name = (drive_folder or GEE_DRIVE_FOLDER).strip() or GEE_DRIVE_FOLDER
+        sync_dir = local_drive_path or str(GDRIVE_SYNC_DIR)
+
+        # 分级降级策略
+        levels = [
+            (15, 3, True,  "mean",   "A+"),
+            (20, 2, True,  "mean",   "A"),
+            (25, 2, False, "median", "B+"),
+            (40, 1, False, "single", "B-"),
+            (100, 1, False, "median", "C"),
+        ]
+
+        results = []
+        failed_months = []
+
+        for month in range(1, 13):
+            last_day = calendar.monthrange(year, month)[1]
+            start_date = f"{year}-{month:02d}-01"
+            end_date = f"{year}-{month:02d}-{last_day:02d}"
+            output_tif = os.path.join(output_dir, f"{year}_{month:02d}_lst.tif")
+
+            try:
+                # 获取整月所有场景
+                col8 = (
+                    ee.ImageCollection("LANDSAT/LC08/C02/T1_L2")
+                    .filterBounds(geom)
+                    .filterDate(start_date, end_date)
+                )
+                col9 = (
+                    ee.ImageCollection("LANDSAT/LC09/C02/T1_L2")
+                    .filterBounds(geom)
+                    .filterDate(start_date, end_date)
+                )
+                all_scenes = col8.merge(col9)
+                total_count = all_scenes.size().getInfo()
+
+                if total_count == 0:
+                    failed_months.append({"month": month, "reason": "无可用影像"})
+                    continue
+
+                # 分级选景
+                selected_col = None
+                selected_level = None
+                selected_quality = None
+                selected_method = None
+                selected_count = 0
+
+                for cloud_thresh, min_scenes, distributed, method, quality in levels:
+                    filtered = all_scenes.filter(ee.Filter.lte("CLOUD_COVER", cloud_thresh))
+                    cnt = filtered.size().getInfo()
+
+                    if cnt < min_scenes:
+                        continue
+
+                    if distributed and cnt >= 3:
+                        from datetime import datetime, timedelta
+                        sd = datetime.strptime(start_date, "%Y-%m-%d")
+                        ed = datetime.strptime(end_date, "%Y-%m-%d")
+                        total_days = (ed - sd).days + 1
+                        period_days = max(total_days // 3, 1)
+
+                        selected = []
+                        for i in range(3):
+                            p_start = sd + timedelta(days=i * period_days)
+                            p_end = p_start + timedelta(days=period_days - 1)
+                            if i == 2:
+                                p_end = ed
+                            sub = filtered.filterDate(
+                                p_start.strftime("%Y-%m-%d"),
+                                (p_end + timedelta(days=1)).strftime("%Y-%m-%d"),
+                            )
+                            best = sub.sort("CLOUD_COVER").limit(1)
+                            selected.append(best)
+
+                        merged = selected[0]
+                        for c in selected[1:]:
+                            merged = merged.merge(c)
+                        actual_cnt = merged.size().getInfo()
+
+                        if actual_cnt >= min_scenes:
+                            selected_col = merged
+                            selected_count = actual_cnt
+                        else:
+                            selected_col = filtered.sort("CLOUD_COVER").limit(min(cnt, 3))
+                            selected_count = min(cnt, 3)
+                    else:
+                        take = min(cnt, 3) if method != "single" else 1
+                        selected_col = filtered.sort("CLOUD_COVER").limit(take)
+                        selected_count = take
+
+                    selected_level = levels.index((cloud_thresh, min_scenes, distributed, method, quality)) + 1
+                    selected_quality = quality
+                    selected_method = method
+                    break
+
+                if selected_col is None:
+                    failed_months.append({"month": month, "reason": "无满足条件的影像"})
+                    continue
+
+                # 逐景去云 + SCA 反演 + 合成
+                col_masked = selected_col.map(_mask_clouds_qa)
+                lst_col = col_masked.map(_compute_lst_gee)
+
+                if selected_method == "mean":
+                    monthly_lst = lst_col.mean().clip(geom)
+                elif selected_method == "single":
+                    monthly_lst = ee.Image(lst_col.first()).clip(geom)
+                else:
+                    monthly_lst = lst_col.median().clip(geom)
+
+                filled = monthly_lst.focal_mean(radius=1, kernelType="square", units="pixels")
+                monthly_lst = monthly_lst.unmask(filled).clip(geom)
+                export_img = monthly_lst.rename("LST")
+
+                # 下载
+                _ensure_parent(output_tif)
+                direct_result = _download_direct(
+                    export_img=export_img,
+                    geom=geom,
+                    scale=int(scale),
+                    output_tif=output_tif,
+                    timeout_sec=min(int(download_timeout), 300),
+                )
+
+                if direct_result.get("success"):
+                    method_desc = {"mean": "均值", "median": "中值", "single": "单景"}[selected_method]
+                    results.append({
+                        "month": month,
+                        "output_tif": output_tif,
+                        "scene_count": selected_count,
+                        "total_scenes": total_count,
+                        "quality": selected_quality,
+                        "method": f"{selected_count}景{method_desc}",
+                    })
+                else:
+                    # 回退到 Google Drive 导出
+                    print(f"[GEE] {start_date}~{end_date} 直接下载失败，回退 Drive: {direct_result.get('message', '')}")
+                    import time as _time
+                    _ts = int(_time.time()) % 100000
+                    drive_task_name = f"gee_yearly_lst_{year}_{month:02d}_{_ts}"
+                    local_path = _wait_drive_file(
+                        export_img=export_img,
+                        task_name=drive_task_name,
+                        folder=folder_name,
+                        scale=int(scale),
+                        geom=geom,
+                        sync_dir=sync_dir,
+                        timeout_sec=int(download_timeout),
+                    )
+                    if local_path:
+                        shutil.copy2(local_path, output_tif)
+                        method_desc = {"mean": "均值", "median": "中值", "single": "单景"}[selected_method]
+                        results.append({
+                            "month": month,
+                            "output_tif": output_tif,
+                            "scene_count": selected_count,
+                            "total_scenes": total_count,
+                            "quality": selected_quality,
+                            "method": f"{selected_count}景{method_desc}",
+                        })
+                    else:
+                        failed_months.append({"month": month, "reason": "下载失败（直接+Drive均失败）"})
+
+            except Exception as e:
+                failed_months.append({"month": month, "reason": str(e)})
+
+        success_count = len(results)
+        if success_count == 0:
+            return {
+                "success": False,
+                "message": f"{year}年全年 12 个月均无可用数据",
+                "failed_months": failed_months,
+            }
+
+        # 质量统计
+        quality_counts = {}
+        for r in results:
+            q = r["quality"]
+            quality_counts[q] = quality_counts.get(q, 0) + 1
+
+        return {
+            "success": True,
+            "message": f"{year}年 LST 批量反演完成：{success_count}/12 个月成功",
+            "output_dir": output_dir,
+            "year": year,
+            "results": results,
+            "failed_months": failed_months,
+            "success_count": success_count,
+            "quality_summary": quality_counts,
+        }
+
+    except Exception as e:
+        return {"success": False, "message": f"年度 LST 批量反演失败: {e}"}
+
+
+def gee_download_multi_year_lst(
+    start_year: int,
+    end_year: int,
+    month: int,
+    output_dir: str,
+    region: Any = None,
+    region_path: Optional[str] = None,
+    scale: int = 30,
+    project_id: Optional[str] = None,
+    drive_folder: str = "",
+    local_drive_path: Optional[str] = None,
+    download_timeout: int = 900,
+) -> Dict[str, Any]:
+    """
+    跨多年单月 LST 批量反演。
+
+    对 start_year~end_year 每一年的指定月份，执行分级降级选景 + 逐景 SCA 反演。
+    输出 N 个单波段 LST GeoTIFF（°C），文件名格式：{year}_{month:02d}_lst.tif
+
+    典型用法：用户说"2020-2025年每年8月的地表温度"
+    """
+    from gis.gee_timelapse import _compute_lst_gee
+    import calendar
+
+    if not (1 <= month <= 12):
+        return {"success": False, "message": f"月份无效：{month}，必须在 1~12 之间"}
+
+    init_result = init_gee(project_id=project_id)
+    if not init_result.get("success"):
+        return init_result
+
+    try:
+        try:
+            geom = _normalize_region(region=region, region_path=region_path)
+        except Exception as e:
+            return {"success": False, "message": f"AOI 解析失败: {e}"}
+
+        os.makedirs(output_dir, exist_ok=True)
+
+        folder_name = (drive_folder or GEE_DRIVE_FOLDER).strip() or GEE_DRIVE_FOLDER
+        sync_dir = local_drive_path or str(GDRIVE_SYNC_DIR)
+
+        levels = [
+            (15, 3, True,  "mean",   "A+"),
+            (20, 2, True,  "mean",   "A"),
+            (25, 2, False, "median", "B+"),
+            (40, 1, False, "single", "B-"),
+            (100, 1, False, "median", "C"),
+        ]
+
+        results = []
+        failed_years = []
+
+        for year in range(start_year, end_year + 1):
+            last_day = calendar.monthrange(year, month)[1]
+            start_date = f"{year}-{month:02d}-01"
+            end_date = f"{year}-{month:02d}-{last_day:02d}"
+            output_tif = os.path.join(output_dir, f"{year}_{month:02d}_lst.tif")
+
+            try:
+                col8 = (
+                    ee.ImageCollection("LANDSAT/LC08/C02/T1_L2")
+                    .filterBounds(geom)
+                    .filterDate(start_date, end_date)
+                )
+                col9 = (
+                    ee.ImageCollection("LANDSAT/LC09/C02/T1_L2")
+                    .filterBounds(geom)
+                    .filterDate(start_date, end_date)
+                )
+                # L9 2021年底才发射，早期年份无数据是正常的
+                all_scenes = col8.merge(col9)
+                total_count = all_scenes.size().getInfo()
+
+                if total_count == 0:
+                    failed_years.append({"year": year, "reason": "无可用影像"})
+                    continue
+
+                # 分级选景
+                selected_col = None
+                selected_quality = None
+                selected_method = None
+                selected_count = 0
+
+                for cloud_thresh, min_scenes, distributed, method, quality in levels:
+                    filtered = all_scenes.filter(ee.Filter.lte("CLOUD_COVER", cloud_thresh))
+                    cnt = filtered.size().getInfo()
+
+                    if cnt < min_scenes:
+                        continue
+
+                    if distributed and cnt >= 3:
+                        from datetime import datetime, timedelta
+                        sd = datetime.strptime(start_date, "%Y-%m-%d")
+                        ed = datetime.strptime(end_date, "%Y-%m-%d")
+                        total_days = (ed - sd).days + 1
+                        period_days = max(total_days // 3, 1)
+
+                        selected = []
+                        for i in range(3):
+                            p_start = sd + timedelta(days=i * period_days)
+                            p_end = p_start + timedelta(days=period_days - 1)
+                            if i == 2:
+                                p_end = ed
+                            sub = filtered.filterDate(
+                                p_start.strftime("%Y-%m-%d"),
+                                (p_end + timedelta(days=1)).strftime("%Y-%m-%d"),
+                            )
+                            best = sub.sort("CLOUD_COVER").limit(1)
+                            selected.append(best)
+
+                        merged = selected[0]
+                        for c in selected[1:]:
+                            merged = merged.merge(c)
+                        actual_cnt = merged.size().getInfo()
+
+                        if actual_cnt >= min_scenes:
+                            selected_col = merged
+                            selected_count = actual_cnt
+                        else:
+                            selected_col = filtered.sort("CLOUD_COVER").limit(min(cnt, 3))
+                            selected_count = min(cnt, 3)
+                    else:
+                        take = min(cnt, 3) if method != "single" else 1
+                        selected_col = filtered.sort("CLOUD_COVER").limit(take)
+                        selected_count = take
+
+                    selected_quality = quality
+                    selected_method = method
+                    break
+
+                if selected_col is None:
+                    failed_years.append({"year": year, "reason": "无满足条件的影像"})
+                    continue
+
+                col_masked = selected_col.map(_mask_clouds_qa)
+                lst_col = col_masked.map(_compute_lst_gee)
+
+                if selected_method == "mean":
+                    monthly_lst = lst_col.mean().clip(geom)
+                elif selected_method == "single":
+                    monthly_lst = ee.Image(lst_col.first()).clip(geom)
+                else:
+                    monthly_lst = lst_col.median().clip(geom)
+
+                filled = monthly_lst.focal_mean(radius=1, kernelType="square", units="pixels")
+                monthly_lst = monthly_lst.unmask(filled).clip(geom)
+                export_img = monthly_lst.rename("LST")
+
+                _ensure_parent(output_tif)
+                direct_result = _download_direct(
+                    export_img=export_img,
+                    geom=geom,
+                    scale=int(scale),
+                    output_tif=output_tif,
+                    timeout_sec=min(int(download_timeout), 300),
+                )
+
+                if direct_result.get("success"):
+                    method_desc = {"mean": "均值", "median": "中值", "single": "单景"}[selected_method]
+                    results.append({
+                        "year": year,
+                        "output_tif": output_tif,
+                        "scene_count": selected_count,
+                        "total_scenes": total_count,
+                        "quality": selected_quality,
+                        "method": f"{selected_count}景{method_desc}",
+                    })
+                else:
+                    # 回退到 Google Drive 导出
+                    print(f"[GEE] {start_date}~{end_date} 直接下载失败，回退 Drive: {direct_result.get('message', '')}")
+                    import time as _time
+                    _ts = int(_time.time()) % 100000
+                    drive_task_name = f"gee_multiyear_lst_{year}_{month:02d}_{_ts}"
+                    local_path = _wait_drive_file(
+                        export_img=export_img,
+                        task_name=drive_task_name,
+                        folder=folder_name,
+                        scale=int(scale),
+                        geom=geom,
+                        sync_dir=sync_dir,
+                        timeout_sec=int(download_timeout),
+                    )
+                    if local_path:
+                        shutil.copy2(local_path, output_tif)
+                        method_desc = {"mean": "均值", "median": "中值", "single": "单景"}[selected_method]
+                        results.append({
+                            "year": year,
+                            "output_tif": output_tif,
+                            "scene_count": selected_count,
+                            "total_scenes": total_count,
+                            "quality": selected_quality,
+                            "method": f"{selected_count}景{method_desc}",
+                        })
+                    else:
+                        failed_years.append({"year": year, "reason": "下载失败（直接+Drive均失败）"})
+
+            except Exception as e:
+                failed_years.append({"year": year, "reason": str(e)})
+
+        success_count = len(results)
+        if success_count == 0:
+            return {
+                "success": False,
+                "message": f"{start_year}-{end_year}年{month}月均无可用数据",
+                "failed_years": failed_years,
+            }
+
+        quality_counts = {}
+        for r in results:
+            q = r["quality"]
+            quality_counts[q] = quality_counts.get(q, 0) + 1
+
+        return {
+            "success": True,
+            "message": f"{start_year}-{end_year}年{month}月 LST 批量反演完成：{success_count}/{end_year - start_year + 1} 年成功",
+            "output_dir": output_dir,
+            "start_year": start_year,
+            "end_year": end_year,
+            "month": month,
+            "results": results,
+            "failed_years": failed_years,
+            "success_count": success_count,
+            "quality_summary": quality_counts,
+        }
+
+    except Exception as e:
+        return {"success": False, "message": f"跨多年 LST 批量反演失败: {e}"}
 
 
 # ============================================================

@@ -7,6 +7,7 @@ Agent 核心引擎 - 完整的 GIS 智能体
 1. _validate_decision 新增时间序列流程校正
 2. _has_timelapse_intent 新增
 3. 移除规则回退模式，LLM 为唯一决策路径
+4. 【修复】添加 region 一致性校验，防止跨任务区域污染
 """
 
 from __future__ import annotations
@@ -120,6 +121,75 @@ def _extract_month(text: str) -> int:
     return 7
 
 
+def _has_monthly_lst_intent(text: str) -> bool:
+    """检测用户是否有月度 LST 合成意图（月份 + 温度/LST 关键词）"""
+    t = text.lower()
+    has_lst_kw = any(k in t for k in ["地表温度", "lst", "温度反演", "热红外", "地温"])
+    has_month_kw = any(k in t for k in ["月度", "月均", "每月", "月平均"])
+    has_month_pattern = bool(re.search(r"\d{1,2}\s*月", t)) or bool(re.search(r"年\s*\d{1,2}\s*月", t))
+    return has_lst_kw and (has_month_kw or has_month_pattern)
+
+
+def _has_yearly_lst_intent(text: str) -> bool:
+    """检测用户是否有年度批量 LST 意图（全年/12个月 + 温度/LST）"""
+    t = text.lower()
+    has_lst_kw = any(k in t for k in ["地表温度", "lst", "温度反演", "热红外", "地温"])
+    has_yearly_kw = any(k in t for k in ["全年", "12个月", "十二个月", "一年", "逐月", "每个月", "各月", "每月"])
+    return has_lst_kw and has_yearly_kw
+
+
+def _has_multi_year_lst_intent(text: str) -> bool:
+    """检测用户是否有跨多年单月 LST 意图（如"2020-2025年每年8月"）"""
+    t = text.lower()
+    has_lst_kw = any(k in t for k in ["地表温度", "lst", "温度反演", "热红外", "地温"])
+    # 匹配 "YYYY-YYYY年每年M月" 或 "YYYY到YYYY年每年M月"
+    has_multi_year = bool(re.search(r"\d{4}\s*[-到~]\s*\d{4}\s*年.*每年\s*\d{1,2}\s*月", t))
+    # 匹配 "连续N年M月"
+    has_consecutive = bool(re.search(r"连续\s*\d+\s*年.*\d{1,2}\s*月", t))
+    return has_lst_kw and (has_multi_year or has_consecutive)
+
+
+def _extract_multi_year_range(text: str) -> tuple[int, int, int]:
+    """从文本中提取跨多年范围和月份，如 '2020-2025年每年8月' → (2020, 2025, 8)"""
+    # "YYYY-YYYY年每年M月"
+    m = re.search(r"(\d{4})\s*[-到~]\s*(\d{4})\s*年.*每年\s*(\d{1,2})\s*月", text)
+    if m:
+        return int(m.group(1)), int(m.group(2)), int(m.group(3))
+    # "连续N年M月" → 从当前年往前推
+    m = re.search(r"连续\s*(\d+)\s*年.*(\d{1,2})\s*月", text)
+    if m:
+        n = int(m.group(1))
+        month = int(m.group(2))
+        from datetime import date
+        cur_year = date.today().year
+        return cur_year - n + 1, cur_year, month
+    return 2020, 2025, 8
+
+
+# ── 需要研究区的 GEE 工具集合 ──
+_GEE_TOOLS_NEEDING_REGION = {
+    "gee_download_landsat_sca",
+    "gee_download_monthly_lst",
+    "gee_download_yearly_lst",
+    "gee_download_multi_year_lst",
+    "gee_lst_timelapse",
+    "gee_lst_timelapse_local",
+    "gee_lst_split_panel",
+    "gee_lst_trend_chart",
+    "gee_timeseries_inspector",
+    "gee_chart_timeseries",
+    "gee_chart_by_region",
+    "gee_chart_phenology",
+    "dynamic_world_landcover",
+    "gee_download_collection",
+    "gee_download_tiled",
+    "generate_timeslider_map",
+    "ee_unsupervised_classify",
+    "ee_supervised_classify",
+    "gee_zonal_statistics",
+}
+
+
 class GISAgent:
     """
     GIS 智能体
@@ -166,6 +236,14 @@ class GISAgent:
             start_date = dates[0]
             end_date = dates[-1] if len(dates) >= 2 else dates[0]
             return start_date, end_date
+        # "YYYY年M月" 模式 → 展开为该月首日~末日
+        m = re.search(r"(\d{4})\s*年\s*(\d{1,2})\s*月", text)
+        if m:
+            import calendar
+            year, month = int(m.group(1)), int(m.group(2))
+            if 1 <= month <= 12:
+                last_day = calendar.monthrange(year, month)[1]
+                return f"{year}-{month:02d}-01", f"{year}-{month:02d}-{last_day:02d}"
         return self._default_last_full_month()
 
     def _extract_admin_region_name(self, text: str) -> Optional[str]:
@@ -268,8 +346,8 @@ class GISAgent:
                     timelapse_tool = _pick_timelapse_tool(text)
                     # 保留 LLM 已提取的参数（LLM 可能已经正确解析了月份/年份）
                     llm_args = decision.get("args") or {}
-                    start_year = llm_args.get("start_year") or llm_args.get("start_year")
-                    end_year = llm_args.get("end_year") or llm_args.get("end_year")
+                    start_year = llm_args.get("start_year")
+                    end_year = llm_args.get("end_year")
                     month = llm_args.get("month")
                     if start_year is None or end_year is None:
                         s, e = _extract_year_range(text)
@@ -292,21 +370,24 @@ class GISAgent:
             need_gee_download = bool(
                 bbox_match and len(date_matches) >= 1 and (has_gee_kw or len(date_matches) >= 2)
             )
-            if need_gee_download and not already_downloaded and decision.get("tool") != "gee_download_landsat_sca":
-                xmin = float(bbox_match.group(1))
-                ymin = float(bbox_match.group(2))
-                xmax = float(bbox_match.group(3))
-                ymax = float(bbox_match.group(4))
-                start_date, end_date = self._extract_date_range_or_default(text)
+            if need_gee_download and not already_downloaded:
+                has_monthly_lst = _has_monthly_lst_intent(text)
+                target_tool = "gee_download_monthly_lst" if has_monthly_lst else "gee_download_landsat_sca"
+                if decision.get("tool") != target_tool:
+                    xmin = float(bbox_match.group(1))
+                    ymin = float(bbox_match.group(2))
+                    xmax = float(bbox_match.group(3))
+                    ymax = float(bbox_match.group(4))
+                    start_date, end_date = self._extract_date_range_or_default(text)
 
-                return {
-                    "type": "tool_call",
-                    "tool": "gee_download_landsat_sca",
-                    "args": {
-                        "region": [xmin, ymin, xmax, ymax],
-                        "start_date": start_date,
-                        "end_date": end_date,
-                    },
+                    return {
+                        "type": "tool_call",
+                        "tool": target_tool,
+                        "args": {
+                            "region": [xmin, ymin, xmax, ymax],
+                            "start_date": start_date,
+                            "end_date": end_date,
+                        },
                     "reason": f"[强制校正] 本轮尚未执行 GEE 下载，先下载 bbox=[{xmin},{ymin},{xmax},{ymax}] {start_date}~{end_date} 的 Landsat 数据。",
                 }
 
@@ -320,17 +401,57 @@ class GISAgent:
                         "reason": f"[强制校正] 用户使用行政区名称作为研究区，先解析边界：{admin_name}",
                     }
 
-                if already_resolved and not already_downloaded and decision.get("tool") != "gee_download_landsat_sca":
-                    start_date, end_date = self._extract_date_range_or_default(text)
-                    return {
-                        "type": "tool_call",
-                        "tool": "gee_download_landsat_sca",
-                        "args": {
-                            "start_date": start_date,
-                            "end_date": end_date,
-                        },
-                        "reason": f"[强制校正] 行政区边界已解析，继续从 GEE 下载 {start_date}~{end_date} 数据。",
-                    }
+                if already_resolved and not already_downloaded:
+                    # 跨多年单月 > 年度批量 > 月度单月 > 普通下载
+                    has_multi_year = _has_multi_year_lst_intent(text)
+                    has_yearly = _has_yearly_lst_intent(text)
+                    has_monthly = _has_monthly_lst_intent(text)
+
+                    if has_multi_year:
+                        sy, ey, mon = _extract_multi_year_range(text)
+                        if decision.get("tool") != "gee_download_multi_year_lst":
+                            return {
+                                "type": "tool_call",
+                                "tool": "gee_download_multi_year_lst",
+                                "args": {"start_year": sy, "end_year": ey, "month": mon},
+                                "reason": f"[强制校正] 行政区边界已解析，执行 {sy}-{ey} 年每年 {mon} 月 LST 批量反演。",
+                            }
+                    elif has_yearly:
+                        import re as _re
+                        year_match = _re.search(r"(\d{4})\s*年", text)
+                        year = int(year_match.group(1)) if year_match else 2025
+                        if decision.get("tool") != "gee_download_yearly_lst":
+                            return {
+                                "type": "tool_call",
+                                "tool": "gee_download_yearly_lst",
+                                "args": {"year": year},
+                                "reason": f"[强制校正] 行政区边界已解析，执行 {year} 年全年月度 LST 批量反演。",
+                            }
+                    elif has_monthly:
+                        target_tool = "gee_download_monthly_lst"
+                        if decision.get("tool") != target_tool:
+                            start_date, end_date = self._extract_date_range_or_default(text)
+                            return {
+                                "type": "tool_call",
+                                "tool": target_tool,
+                                "args": {
+                                    "start_date": start_date,
+                                    "end_date": end_date,
+                                },
+                                "reason": f"[强制校正] 行政区边界已解析，执行月度 LST 合成 {start_date}~{end_date}。",
+                            }
+                    else:
+                        if decision.get("tool") != "gee_download_landsat_sca":
+                            start_date, end_date = self._extract_date_range_or_default(text)
+                            return {
+                                "type": "tool_call",
+                                "tool": "gee_download_landsat_sca",
+                                "args": {
+                                    "start_date": start_date,
+                                    "end_date": end_date,
+                                },
+                                "reason": f"[强制校正] 行政区边界已解析，继续从 GEE 下载 {start_date}~{end_date} 数据。",
+                            }
 
         # ── 图例微调 vs 绝对位置 ──
         if decision.get("type") != "tool_call" or decision.get("tool") != "set_map_style":
@@ -366,6 +487,65 @@ class GISAgent:
             decision["reason"] = decision.get("reason", "") + " [已校正：微调偏移而非绝对位置]"
 
         return decision
+
+    # ── region 一致性校验 ─────────────────────────────
+
+    def _check_region_consistency(
+        self,
+        tool: str,
+        args: Dict[str, Any],
+        user_input: str,
+        history: List[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        """
+        工具执行前的 region 一致性校验。
+
+        修复：跨任务状态污染的第二道防线。
+        如果当前任务的用户输入中提到了行政区名称，但 runtime 中的
+        last_region_name 与之不匹配，说明可能存在状态污染，
+        强制重新解析行政区边界。
+
+        返回 None 表示一致性检查通过，返回 dict 表示需要替换为该决策。
+        """
+        # 仅对需要研究区的 GEE 工具做检查
+        if tool not in _GEE_TOOLS_NEEDING_REGION:
+            return None
+
+        # 如果 args 中已经显式传了 region，不需要检查
+        if args.get("region"):
+            return None
+
+        # 如果用户输入中没有行政区名称，不需要检查
+        admin_name = self._extract_admin_region_name(user_input)
+        if not admin_name:
+            return None
+
+        # 如果当前任务中已经成功解析了行政区，检查是否匹配
+        if self._admin_region_done_in_history(history):
+            # 当前任务已有解析结果，检查 runtime 中的名称是否匹配用户输入
+            current_region = self.runtime.last_region_name or ""
+            # 简单子串匹配：用户输入的行政区名应出现在已解析的名称中
+            if admin_name in current_region or current_region in admin_name:
+                return None  # 一致，继续执行
+            # 不一致，强制重新解析
+            return {
+                "type": "tool_call",
+                "tool": "resolve_admin_region",
+                "args": {"region_name": admin_name},
+                "reason": f"[region 一致性校验] 用户输入行政区'{admin_name}'与当前研究区'{current_region}'不匹配，重新解析。",
+            }
+
+        # 当前任务尚未解析行政区，但用户提到了行政区名称
+        # 如果 runtime 中有旧的 region_name，且与当前不匹配，需要重新解析
+        if self.runtime.last_region_name and admin_name not in self.runtime.last_region_name:
+            return {
+                "type": "tool_call",
+                "tool": "resolve_admin_region",
+                "args": {"region_name": admin_name},
+                "reason": f"[region 一致性校验] 用户输入行政区'{admin_name}'与 runtime 中的'{self.runtime.last_region_name}'不匹配，重新解析。",
+            }
+
+        return None
 
     # ── 统一决策 ─────────────────────────────────────
 
@@ -429,7 +609,6 @@ class GISAgent:
 
         # 情况 B：bbox + 日期 + (下载/温度反演) → 直接 GEE 下载
         if bbox_match and (has_download or has_lst or has_gee_kw):
-            dates = re.findall(r"\d{4}-\d{2}-\d{2}", text)
             start_date, end_date = self._extract_date_range_or_default(text)
             xmin, ymin, xmax, ymax = (
                 float(bbox_match.group(1)),
@@ -437,9 +616,11 @@ class GISAgent:
                 float(bbox_match.group(3)),
                 float(bbox_match.group(4)),
             )
+            has_monthly_lst = _has_monthly_lst_intent(text)
+            target_tool = "gee_download_monthly_lst" if has_monthly_lst else "gee_download_landsat_sca"
             return {
                 "type": "tool_call",
-                "tool": "gee_download_landsat_sca",
+                "tool": target_tool,
                 "args": {
                     "region": [xmin, ymin, xmax, ymax],
                     "start_date": start_date,
@@ -488,6 +669,7 @@ class GISAgent:
 
     def run(self, user_input: str) -> Dict[str, Any]:
         self.memory.start_new_task(user_input)
+        self.runtime.reset_for_new_task()  # 重置运行时状态，防止跨任务污染
         history: List[Dict[str, Any]] = []
         last_result: Dict[str, Any] | None = None
         final_answer = ""
@@ -519,6 +701,14 @@ class GISAgent:
             tool = str(decision.get("tool", "")).strip()
             args = decision.get("args") or {}
             reason = str(decision.get("reason", "")).strip()
+
+            # ── 【修复】region 一致性校验（第二道防线）──
+            region_fix = self._check_region_consistency(tool, args, user_input, history)
+            if region_fix:
+                # region 不一致，强制重新解析行政区
+                tool = region_fix["tool"]
+                args = region_fix["args"]
+                reason = region_fix["reason"]
 
             if history and history[-1]["tool"] == "set_map_style" and tool != "make_thematic_map":
                 tool = "make_thematic_map"
