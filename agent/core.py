@@ -701,7 +701,7 @@ class GISAgent:
 
     def run(self, user_input: str) -> Dict[str, Any]:
         self.memory.start_new_task(user_input)
-        self.runtime.reset_for_new_task()  # 重置运行时状态，防止跨任务污染
+        self.runtime.reset_for_new_task()
         history: List[Dict[str, Any]] = []
         last_result: Dict[str, Any] | None = None
         final_answer = ""
@@ -709,6 +709,32 @@ class GISAgent:
 
         for step in range(1, self.max_steps + 1):
             loop_warning = self._detect_loop(history)
+
+            # 硬性循环阻止：下载工具连调 2 次直接强制 final，不给 LLM 机会
+            if loop_warning:
+                forced_stop = True
+                # 先补一张专题图（如果需要的话）
+                if _should_auto_make_map(history):
+                    try:
+                        map_result = self.registry.call("make_thematic_map", {})
+                        if "success" not in map_result:
+                            map_result["success"] = True
+                    except Exception as exc:
+                        map_result = {"success": False, "message": str(exc)}
+                    self.memory.append_event(
+                        step=step, tool="make_thematic_map", args={},
+                        result=map_result, reason="循环检测触发前自动生成专题图",
+                    )
+                    self.memory.mark_completed("make_thematic_map")
+                    self.memory.session.map_style = dict(self.runtime.map_style)
+                    self.memory.save()
+                    history.append({
+                        "step": step, "tool": "make_thematic_map", "args": {},
+                        "reason": "循环检测触发前自动生成专题图", "result": map_result,
+                    })
+                    last_result = map_result
+                final_answer = f"{loop_warning}\n\n{last_result.get('message', '任务已完成，请查看输出文件。')}"
+                break
 
             try:
                 decision = self._decide(
@@ -723,7 +749,6 @@ class GISAgent:
                 break
 
             if decision.get("type") == "final":
-                # 如果已产出 LST 数据但还没制专题图，自动补一张
                 if _should_auto_make_map(history):
                     try:
                         map_result = self.registry.call("make_thematic_map", {})
@@ -843,11 +868,6 @@ class GISAgent:
                 }
                 history.append(render_record)
                 last_result = render_result
-
-            if loop_warning and len(history) >= 2:
-                forced_stop = True
-                final_answer = f"检测到执行循环，自动终止。{result.get('message', '已完成，请查看输出文件。')}"
-                break
 
             if not result.get("success", False) and step >= max(3, self.max_steps - 2):
                 final_answer = result.get("message", "执行失败")
