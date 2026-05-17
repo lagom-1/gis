@@ -195,7 +195,7 @@ def _should_auto_make_map(history: List[Dict[str, Any]]) -> bool:
     if not history:
         return False
     # 1. 是否有 LST 数据产出
-    data_producers = {"run_lst", "gee_download_monthly_lst"}
+    data_producers = {"run_lst", "gee_compute_lst", "gee_download_monthly_lst"}
     map_tools = {"make_thematic_map", "generate_web_map", "classify_map",
                  "gee_lst_timelapse", "gee_lst_timelapse_local", "gee_lst_split_panel",
                  "generate_timeslider_map"}
@@ -327,8 +327,8 @@ class GISAgent:
     ) -> Dict[str, Any]:
         """
         在 LLM 返回决策后进行校正。
-        1) 中国行政区名称研究区：先 resolve_admin_region，再 gee_download_landsat_sca
-        2) bbox + 日期：优先 gee_download_landsat_sca
+        1) 中国行政区名称研究区：先 resolve_admin_region，再 gee_compute_lst (GEE云端反演)
+        2) bbox + 日期：优先 gee_compute_lst
         3) 图例微调 vs 绝对位置
         4) 【新增】时间序列流程：先 resolve_admin_region，再 timelapse 工具
         """
@@ -394,7 +394,7 @@ class GISAgent:
             )
             if need_gee_download and not already_downloaded:
                 has_monthly_lst = _has_monthly_lst_intent(text)
-                target_tool = "gee_download_monthly_lst" if has_monthly_lst else "gee_download_landsat_sca"
+                target_tool = "gee_download_monthly_lst" if has_monthly_lst else "gee_compute_lst"
                 if decision.get("tool") != target_tool:
                     xmin = float(bbox_match.group(1))
                     ymin = float(bbox_match.group(2))
@@ -463,16 +463,16 @@ class GISAgent:
                                 "reason": f"[强制校正] 行政区边界已解析，执行月度 LST 合成 {start_date}~{end_date}。",
                             }
                     else:
-                        if decision.get("tool") != "gee_download_landsat_sca":
+                        if decision.get("tool") != "gee_compute_lst":
                             start_date, end_date = self._extract_date_range_or_default(text)
                             return {
                                 "type": "tool_call",
-                                "tool": "gee_download_landsat_sca",
+                                "tool": "gee_compute_lst",
                                 "args": {
                                     "start_date": start_date,
                                     "end_date": end_date,
                                 },
-                                "reason": f"[强制校正] 行政区边界已解析，继续从 GEE 下载 {start_date}~{end_date} 数据。",
+                                "reason": f"[强制校正] 行政区边界已解析，GEE 云端反演 LST {start_date}~{end_date}。",
                             }
 
         # ── 图例微调 vs 绝对位置 ──
@@ -639,7 +639,7 @@ class GISAgent:
                 float(bbox_match.group(4)),
             )
             has_monthly_lst = _has_monthly_lst_intent(text)
-            target_tool = "gee_download_monthly_lst" if has_monthly_lst else "gee_download_landsat_sca"
+            target_tool = "gee_download_monthly_lst" if has_monthly_lst else "gee_compute_lst"
             return {
                 "type": "tool_call",
                 "tool": target_tool,

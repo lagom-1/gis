@@ -521,6 +521,155 @@ def gee_init(project_id: Optional[str] = None, force_auth: bool = False) -> Dict
     return init_gee(project_id=project_id, force_auth=force_auth)
 
 
+def gee_compute_lst(
+    start_date: str,
+    end_date: str,
+    output_tif: str,
+    region: Any = None,
+    region_path: Optional[str] = None,
+    scale: int = 30,
+    cloud_pct: float = 30,
+    project_id: Optional[str] = None,
+    download_timeout: int = 900,
+) -> Dict[str, Any]:
+    """
+    在 GEE 云端直接进行 LST 反演，只下载单波段 LST (°C) TIF。
+
+    流程：
+    1) 筛选 Landsat 8/9 L2 影像
+    2) 在 GEE 端计算 NDVI、植被覆盖度、比辐射率、单通道 LST
+    3) 中值合成后直接 HTTP 下载单波段 GeoTIFF
+
+    相比 download_landsat_sca + 本地 run_lst：
+    - 不需要下载多波段数据（省流量）
+    - GEE 云端并行计算（更快）
+    - 一步完成（更可靠）
+    """
+    init_result = init_gee(project_id=project_id)
+    if not init_result.get("success"):
+        return init_result
+
+    try:
+        geom = _normalize_region(region=region, region_path=region_path)
+    except Exception as e:
+        return {"success": False, "message": f"AOI 解析失败: {e}"}
+
+    try:
+        # 构建 Landsat 8/9 L2 影像集合并做云掩膜
+        l8 = (
+            ee.ImageCollection("LANDSAT/LC08/C02/T1_L2")
+            .filterBounds(geom)
+            .filterDate(start_date, end_date)
+            .filter(ee.Filter.lte("CLOUD_COVER", cloud_pct))
+        )
+        l9 = (
+            ee.ImageCollection("LANDSAT/LC09/C02/T1_L2")
+            .filterBounds(geom)
+            .filterDate(start_date, end_date)
+            .filter(ee.Filter.lte("CLOUD_COVER", cloud_pct))
+        )
+        col = l8.merge(l9)
+
+        count = col.size().getInfo()
+        if count == 0:
+            return {
+                "success": False,
+                "message": f"指定时段 {start_date}~{end_date} 云量<={cloud_pct}% 无可用影像，请放宽云量或调整日期",
+            }
+
+        # 云掩膜
+        qa = col.first().select("QA_PIXEL").bandNames()
+        if qa:
+            def _mask_clouds(image):
+                qa = image.select("QA_PIXEL")
+                cloud_bit = 1 << 3
+                shadow_bit = 1 << 4
+                mask = qa.bitwiseAnd(cloud_bit).eq(0).And(qa.bitwiseAnd(shadow_bit).eq(0))
+                return image.updateMask(mask)
+            col = col.map(_mask_clouds)
+
+        # GEE 端单通道 LST 反演
+        def _compute_lst(image):
+            red = image.select("SR_B4").multiply(0.0000275).add(-0.2)
+            nir = image.select("SR_B5").multiply(0.0000275).add(-0.2)
+            bt = image.select("ST_B10").multiply(0.00341802).add(149.0)
+            ndvi = nir.subtract(red).divide(nir.add(red)).clamp(-1, 1)
+            pv = ndvi.subtract(0.2).divide(0.3).pow(2).clamp(0, 1)
+            emissivity = pv.multiply(0.004).add(0.986)
+            lst = bt.divide(
+                ee.Image(1).add(bt.multiply(10.895e-6).divide(0.01438).multiply(emissivity.log()))
+            ).subtract(273.15)
+            return lst.rename("LST").copyProperties(image, ["system:time_start"])
+
+        lst_col = col.map(_compute_lst)
+        lst_img = lst_col.median().clip(geom)
+
+        # 计算统计信息
+        stats = lst_img.reduceRegion(
+            reducer=ee.Reducer.minMax().combine(
+                ee.Reducer.mean(), sharedInputs=True
+            ).combine(ee.Reducer.stdDev(), sharedInputs=True),
+            geometry=geom,
+            scale=scale,
+            bestEffort=True,
+        ).getInfo()
+
+        # HTTP 直接下载
+        print(f"[GEE LST] 云端反演完成，共 {count} 景影像 → 中值合成，正在下载...")
+        url = lst_img.getDownloadURL({
+            "scale": scale,
+            "region": geom,
+            "format": "GeoTIFF",
+            "crs": "EPSG:4326",
+        })
+
+        _ensure_parent(output_tif)
+        tmp_path = output_tif + ".downloading"
+
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req, timeout=download_timeout) as resp:
+            content_length = resp.headers.get("Content-Length")
+            total_bytes = int(content_length) if content_length else None
+            downloaded = 0
+            with open(tmp_path, "wb") as f:
+                while True:
+                    chunk = resp.read(8192)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    if total_bytes:
+                        pct = int(downloaded * 100 / total_bytes)
+                        bar = "█" * (pct // 5) + "░" * (20 - pct // 5)
+                        print(f"\r[GEE LST] 下载中 |{bar}| {pct}%", end="", flush=True)
+            if total_bytes:
+                print(f"\r[GEE LST] 下载中 |{'█' * 20}| 100%", flush=True)
+
+        os.replace(tmp_path, output_tif)
+        file_size = os.path.getsize(output_tif) / (1024 * 1024)
+
+        lst_min = round(stats.get("LST_min", 0), 1)
+        lst_max = round(stats.get("LST_max", 0), 1)
+        lst_mean = round(stats.get("LST_mean", 0), 1)
+
+        return {
+            "success": True,
+            "message": f"GEE 云端 LST 反演完成：{count} 景合成，{file_size:.1f}MB，温度范围 {lst_min}~{lst_max}°C，均值 {lst_mean}°C",
+            "output_tif": output_tif,
+            "scene_count": count,
+            "lst_min": lst_min,
+            "lst_max": lst_max,
+            "lst_mean": lst_mean,
+        }
+
+    except Exception as e:
+        err = str(e)
+        tmp_path = output_tif + ".downloading"
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        return {"success": False, "message": f"GEE LST 反演失败: {err}"}
+
+
 def gee_download_landsat_sca(
     start_date: str,
     end_date: str,

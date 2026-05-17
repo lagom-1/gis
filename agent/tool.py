@@ -38,7 +38,7 @@ from gis.web_map import generate_web_map, generate_timelapse_web_map
 from gis.admin_region import resolve_admin_region
 
 # ── GEE / geemap 工具 ─────────────────────────────────
-from gis.gee_tools import gee_init, gee_download_landsat_sca, gee_download_monthly_lst, gee_download_yearly_lst, gee_download_multi_year_lst
+from gis.gee_tools import gee_init, gee_compute_lst, gee_download_landsat_sca, gee_download_monthly_lst, gee_download_yearly_lst, gee_download_multi_year_lst
 
 # ── GEE 时间序列工具（新增）────────────────────────────
 from gis.gee_timelapse import (
@@ -290,6 +290,53 @@ def register_tools(registry: ToolRegistry, runtime: GISRuntime, preferences: Dic
             project_id=args.get("project_id"),
             drive_folder=args.get("drive_folder") or GEE_DRIVE_FOLDER,
             local_drive_path=args.get("local_drive_path") or str(GDRIVE_SYNC_DIR),
+            download_timeout=int(args.get("download_timeout", 1800)),
+        )
+
+        if result.get("success") and result.get("output_tif") and os.path.exists(result["output_tif"]):
+            runtime.current_dataset = result.get("output_tif")
+            runtime.last_tif_output = result.get("output_tif")
+            runtime.last_output = None
+            if runtime.source_dataset is None:
+                runtime.source_dataset = result.get("output_tif")
+
+        return result
+
+    # ─────────────────────────────────────────────────────
+    # GEE 云端 LST 反演（直接下载单波段结果）
+    # ─────────────────────────────────────────────────────
+
+    def gee_compute_lst_tool(args: Dict[str, Any]) -> Dict[str, Any]:
+        start_date = args.get("start_date")
+        end_date = args.get("end_date")
+        if not start_date or not end_date:
+            start_date, end_date = _default_last_full_month()
+
+        region = args.get("region")
+        if region is None:
+            region = runtime.last_region_geojson
+        if region is None:
+            return {
+                "success": False,
+                "message": "缺少研究区边界。请先调用 resolve_admin_region 解析行政区边界。",
+                "requires": "resolve_admin_region",
+            }
+
+        region_name = runtime.last_region_name or ""
+        filename = build_task_filename(
+            region_name=region_name, start_date=start_date, end_date=end_date, product="LST"
+        )
+        output_tif = args.get("output_tif") or str(out_dir() / filename)
+
+        result = gee_compute_lst(
+            start_date=start_date,
+            end_date=end_date,
+            output_tif=output_tif,
+            region=region,
+            region_path=args.get("region_path"),
+            scale=int(args.get("scale", 30)),
+            cloud_pct=float(args.get("cloud_pct", 30)),
+            project_id=args.get("project_id"),
             download_timeout=int(args.get("download_timeout", 1800)),
         )
 
@@ -1467,7 +1514,13 @@ def register_tools(registry: ToolRegistry, runtime: GISRuntime, preferences: Dic
         }, "data"),
 
         ("gee_init", "初始化 Google Earth Engine 认证与项目配置。", {"project_id": "可选，GEE 项目 ID", "force_auth": "是否强制重新认证 true/false"}, "data"),
-        ("gee_download_landsat_sca", "从 GEE 下载适合本地 SCA 单通道地表温度反演的 Landsat 8/9 Level-2 三波段数据（red, nir, bt_raw）。先尝试直接 HTTP 下载，文件太大时自动回退 Google Drive 导出。若未给日期，默认上一个完整自然月。适合下载单次/多次场景用于本地反演。", {
+        ("gee_compute_lst", "【推荐】在 GEE 云端直接进行单通道地表温度反演，仅下载单波段 LST(°C) TIF。一步完成，无需后续本地 run_lst。适合下载单时相 LST 并制图。", {
+            "start_date": "开始日期 YYYY-MM-DD，缺省时默认上一个完整自然月",
+            "end_date": "结束日期 YYYY-MM-DD，缺省时默认上一个完整自然月",
+            "cloud_pct": "最大云量百分比 0-100，默认 30",
+            "scale": "分辨率(米)，默认 30",
+        }, "data"),
+        ("gee_download_landsat_sca", "从 GEE 下载适合本地 SCA 单通道地表温度反演的 Landsat 8/9 Level-2 三波段数据（red, nir, bt_raw）。已不推荐，优先使用 gee_compute_lst。", {
             "start_date": "开始日期 YYYY-MM-DD，缺省时默认上一个完整自然月",
             "end_date": "结束日期 YYYY-MM-DD，缺省时默认上一个完整自然月",
             "region": "AOI，可传 [xmin,ymin,xmax,ymax] 或 GeoJSON Feature",
@@ -1686,6 +1739,7 @@ def register_tools(registry: ToolRegistry, runtime: GISRuntime, preferences: Dic
         "inspect_raster": inspect_current_or_path,
         "resolve_admin_region": resolve_admin_region_tool,
         "gee_init": gee_init_tool,
+        "gee_compute_lst": gee_compute_lst_tool,
         "gee_download_landsat_sca": gee_download_landsat_sca_tool,
         "gee_download_monthly_lst": gee_download_monthly_lst_tool,
         "gee_download_yearly_lst": gee_download_yearly_lst_tool,
