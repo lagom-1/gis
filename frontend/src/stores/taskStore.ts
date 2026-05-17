@@ -7,7 +7,7 @@ interface TaskState {
   currentTask: Task | null
   isLoading: boolean
   error: string | null
-  fetchTasks: (params?: { status?: string }) => Promise<void>
+  fetchTasks: (params?: { status?: string; silent?: boolean }) => Promise<void>
   fetchTask: (taskId: number, silent?: boolean) => Promise<void>
   createTask: (data: TaskCreateRequest) => Promise<Task>
   cancelTask: (taskId: number) => Promise<void>
@@ -19,8 +19,8 @@ export const useTaskStore = create<TaskState>((set) => ({
   isLoading: false,
   error: null,
 
-  fetchTasks: async (params) => {
-    set({ isLoading: true, error: null })
+  fetchTasks: async (params, silent = false) => {
+    if (!silent) set({ isLoading: true, error: null })
     try {
       const tasks = await tasksService.getTasks(params)
       set({ tasks, isLoading: false })

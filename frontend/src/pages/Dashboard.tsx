@@ -27,7 +27,7 @@ export default function Dashboard() {
     const hasRunning = tasks.some(t => t.status === 'running' || t.status === 'pending')
     if (hasRunning && !pollTimerRef.current) {
       pollTimerRef.current = setInterval(() => {
-        fetchTasks({ status: statusFilter || undefined })
+        fetchTasks({ status: statusFilter || undefined }, true)  // 静默刷新，不显示 loading
       }, 5000)
     } else if (!hasRunning && pollTimerRef.current) {
       clearInterval(pollTimerRef.current)
