@@ -89,7 +89,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           return {
             currentOutput: files,
             previousOutput: newPrevious,
-            showComparison: newPrevious.length > 0 && files.length > 0,
+            // 不自动开启对比，用户手动切换
           }
         })
       },
