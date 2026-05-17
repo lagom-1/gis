@@ -96,26 +96,19 @@ class MemoryStore:
 
     def start_new_task(self, goal: str) -> None:
         """
-        开始新任务时重置任务级状态。
+        开始新任务时重置执行步数相关状态。
 
-        修复：跨任务状态污染问题 - current_dataset 和 source_dataset
-        必须在新任务开始时清空，防止前一个任务的数据集泄漏到新任务。
-        product_type 和 current_output 也属于任务级状态，需要重置。
-        known_facts 包含上一个任务的检查摘要，也需要清空。
-        map_style 保留，因为它是用户的视觉偏好，跨任务应继承。
+        current_dataset / source_dataset / known_facts 保留，
+        因为用户经常说"将刚刚的结果做时序动画"，需要跨任务上下文。
+        map_style 保留 - 用户视觉偏好，跨任务继承。
         """
         self.session.task_id = uuid.uuid4().hex[:12]
         self.session.goal = goal
         self.session.active_plan = []
         self.session.completed_steps = []
         self.session.recent_events = []
-        # 重置任务级状态，防止跨任务污染
-        self.session.current_dataset = None
-        self.session.source_dataset = None
-        self.session.product_type = None
-        self.session.current_output = None
-        self.session.known_facts = {}
-        # map_style 保留 - 属于用户视觉偏好，跨任务继承
+        # 保留：current_dataset, source_dataset, known_facts, product_type, current_output
+        # 保留：map_style
         self.save()
 
     def append_event(self, step: int, tool: str, args: Dict[str, Any], result: Dict[str, Any], reason: str = "") -> None:
@@ -125,12 +118,30 @@ class MemoryStore:
         self.save()
 
     def _update_from_result(self, tool: str, args: Dict[str, Any], result: Dict[str, Any]) -> None:
-        if tool in {"set_current_dataset", "search_local_files", "inspect_raster", "run_lst", "gee_download_landsat_sca"}:
+        # 数据集路径跟踪
+        if tool in {"set_current_dataset", "search_local_files", "inspect_raster", "run_lst",
+                     "gee_download_landsat_sca", "gee_download_monthly_lst"}:
             path = result.get("selected_path") or result.get("path") or result.get("output_tif") or args.get("path")
             if path:
                 self.session.current_dataset = path
                 if not self.session.source_dataset:
                     self.session.source_dataset = path
+
+        # GEE 批量下载工具：记录输出目录和质量摘要，防止 LLM 重复下载
+        if tool in {"gee_download_yearly_lst", "gee_download_multi_year_lst"}:
+            if result.get("output_dir"):
+                self.session.current_dataset = result["output_dir"]
+                self.session.known_facts["output_dir"] = result["output_dir"]
+            if result.get("success_count") is not None:
+                self.session.known_facts["download_summary"] = {
+                    "tool": tool,
+                    "year": args.get("year"),
+                    "months": args.get("months"),
+                    "success_count": result.get("success_count"),
+                    "quality_summary": result.get("quality_summary"),
+                }
+
+        # 元数据跟踪
         meta = result.get("metadata") or {}
         if meta.get("product_type"):
             self.session.product_type = meta.get("product_type")
@@ -142,6 +153,20 @@ class MemoryStore:
             self.session.known_facts["inspection_summary"] = result["inspection_summary"]
         if result.get("metadata"):
             self.session.known_facts["last_metadata"] = result["metadata"]
+
+        # 时间序列工具：记录已生成的文件
+        if tool in {"generate_lst_timelapse_local", "generate_lst_timelapse"}:
+            if result.get("output_gif"):
+                self.session.current_output = result["output_gif"]
+                self.session.known_facts["timelapse_generated"] = True
+            if result.get("output_path"):
+                self.session.current_output = result.get("output_path")
+
+        # 专题图：记录已生成的图片
+        if tool == "make_thematic_map":
+            if result.get("output_png"):
+                self.session.current_output = result.get("output_png")
+
         if tool == "update_preferences":
             self.preferences.update(result.get("updated_preferences", {}))
         if tool == "set_map_style":

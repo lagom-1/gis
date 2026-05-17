@@ -298,6 +298,8 @@ DECISION_SYSTEM_PROMPT = """
 - 优先让工具去观察现实，而不是靠想象补结论
 - 当用户说"按之前的风格"或"还是导出pdf"，利用 preferences 和 session map_style
 - 当目标已完成，返回 final，不要继续调用工具
+- 检查记忆（known_facts）中的 download_summary，如果数据显示已下载完成则不要重复下载，直接进入下一步
+- 如果当前步骤的结果已经是之前某一步的结果（如 repeated），说明你陷入了循环，必须立即返回 final
 - 不要输出代码块，不要解释
 
 ### ⚠️ 防循环铁律（最高优先级！）
@@ -340,6 +342,15 @@ DECISION_SYSTEM_PROMPT = """
 1. resolve_admin_region → 解析行政区边界（如"旺苍县"）
 2. gee_download_yearly_lst(year=2025) → 云端逐月执行分级降级选景 + 逐景 SCA 反演，输出 12 个单波段 LST TIF
 3. 返回 final，告知用户输出目录和各月质量等级
+
+### 完整Pipeline（指定月份 LST 批量反演 + 时序动画）
+1. resolve_admin_region → 解析行政区边界
+2. gee_download_yearly_lst(year=用户指定年份, months=用户指定月份列表) → 云端逐月执行，输出指定月份的单波段 LST TIF
+3. make_thematic_map → 对每月结果生成专题图 PNG（逐月调用）
+4. generate_lst_timelapse_local → 使用本地 TIF 生成时序动画 GIF
+5. 返回 final，告知用户输出文件列表
+
+说明：当用户说"下载最近几个月"或具体某几个月份的温度反演时，使用此 Pipeline。根据用户原话提取 year 和 months 列表，例如用户说"6-9月"则 months=[6,7,8,9]；用户说"最近6个月"则根据当前月份计算对应的 months 列表。
 
 ### 完整Pipeline（跨多年单月 LST 批量反演）
 1. resolve_admin_region → 解析行政区边界（如"旺苍县"）

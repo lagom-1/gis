@@ -579,29 +579,42 @@ def gee_download_landsat_sca(
         folder_name = (drive_folder or GEE_DRIVE_FOLDER).strip() or GEE_DRIVE_FOLDER
         sync_dir = local_drive_path or str(GDRIVE_SYNC_DIR)
 
-        col = _landsat89_l2_collection(
-            region_geom=geom,
-            start_date=start_date,
-            end_date=end_date,
-            cloud_pct=float(cloud_pct),
-        )
+        cloud_levels = sorted(set([float(cloud_pct), 40, 60, 80, 100]))
+        col = None
+        count = 0
+        used_cloud_pct = float(cloud_pct)
+        for level in cloud_levels:
+            if level < used_cloud_pct:
+                continue
+            col = _landsat89_l2_collection(
+                region_geom=geom,
+                start_date=start_date,
+                end_date=end_date,
+                cloud_pct=float(level),
+            )
+            count = col.size().getInfo()
+            if count > 0:
+                used_cloud_pct = level
+                break
 
-        count = col.size().getInfo()
         if count == 0:
             return {
                 "success": False,
                 "message": f"未找到 {start_date}~{end_date} 内的 Landsat 8/9 影像。请尝试扩大日期范围或检查研究区。",
             }
 
+        if used_cloud_pct > float(cloud_pct):
+            print(f"[GEE] 注意：原始云量阈值 {cloud_pct}% 无可用影像，已放宽至 {used_cloud_pct}%（找到 {count} 景）")
+
         image = _reduce_collection(col, reducer=reducer, mask_clouds=mask_clouds).clip(geom)
 
-        # ── 填补边缘小空洞 ──────────────────────────────────
-        # 去云 + 中值合成后，县边缘只被 1-2 景覆盖的区域可能残留 NoData
-        # 用 1 像素半径的 focal_mean 均值填补，保留原始有效值
+        # ── 填补云掩膜/边缘空洞 ──────────────────────────────
+        # QA_PIXEL 云掩膜后常有散云造成的几像素空洞，以及边缘覆盖不足的 NoData
+        # 用 focal_mean(radius=3, ~210m) 填补，足以覆盖多数碎云间隙
         filled_bands = []
         for band_name in ["SR_B4", "SR_B5", "ST_B10"]:
             band = image.select(band_name)
-            filled = band.focal_mean(radius=1, kernelType="square", units="pixels")
+            filled = band.focal_mean(radius=3, kernelType="square", units="pixels")
             band = band.unmask(filled)
             filled_bands.append(band)
 
@@ -686,7 +699,7 @@ def gee_download_landsat_sca(
             "start_date": start_date,
             "end_date": end_date,
             "scale": int(scale),
-            "cloud_pct": float(cloud_pct),
+            "cloud_pct": used_cloud_pct,
             "reducer": reducer,
             "mask_clouds": bool(mask_clouds),
             "image_count": count,
@@ -868,7 +881,7 @@ def gee_download_monthly_lst(
             method_desc = f"逐景SCA反演→中值（{selected_count}景）"
 
         # ── 4. 填补边缘空洞 ────────────────────────────────
-        filled = monthly_lst.focal_mean(radius=1, kernelType="square", units="pixels")
+        filled = monthly_lst.focal_mean(radius=3, kernelType="square", units="pixels")
         monthly_lst = monthly_lst.unmask(filled).clip(geom)
 
         export_img = monthly_lst.rename("LST")
@@ -956,6 +969,8 @@ def gee_download_yearly_lst(
     output_dir: str,
     region: Any = None,
     region_path: Optional[str] = None,
+    region_name: str = "",
+    months: list = None,
     scale: int = 30,
     project_id: Optional[str] = None,
     drive_folder: str = "",
@@ -966,7 +981,7 @@ def gee_download_yearly_lst(
     批量下载全年 12 个月的月度 LST 合成结果。
 
     对每个月调用 gee_download_monthly_lst 的核心逻辑（分级降级选景 + 逐景 SCA 反演），
-    输出 12 个单波段 LST GeoTIFF（°C），文件名格式：{year}_{month:02d}_lst.tif
+    输出 12 个单波段 LST GeoTIFF（°C），文件名格式：{region_name}_{year}_{month:02d}_lst.tif
     """
     from gis.gee_timelapse import _compute_lst_gee
     import calendar
@@ -1001,11 +1016,12 @@ def gee_download_yearly_lst(
         results = []
         failed_months = []
 
-        for month in range(1, 13):
+        target_months = months if months else list(range(1, 13))
+        for month in target_months:
             last_day = calendar.monthrange(year, month)[1]
             start_date = f"{year}-{month:02d}-01"
             end_date = f"{year}-{month:02d}-{last_day:02d}"
-            output_tif = os.path.join(output_dir, f"{year}_{month:02d}_lst.tif")
+            output_tif = os.path.join(output_dir, f"{region_name + '_' if region_name else ''}{year}_{month:02d}_lst.tif")
 
             try:
                 # 获取整月所有场景
@@ -1096,7 +1112,7 @@ def gee_download_yearly_lst(
                 else:
                     monthly_lst = lst_col.median().clip(geom)
 
-                filled = monthly_lst.focal_mean(radius=1, kernelType="square", units="pixels")
+                filled = monthly_lst.focal_mean(radius=3, kernelType="square", units="pixels")
                 monthly_lst = monthly_lst.unmask(filled).clip(geom)
                 export_img = monthly_lst.rename("LST")
 
@@ -1156,7 +1172,7 @@ def gee_download_yearly_lst(
         if success_count == 0:
             return {
                 "success": False,
-                "message": f"{year}年全年 12 个月均无可用数据",
+                "message": f"{year}年 {len(target_months)} 个月均无可用数据",
                 "failed_months": failed_months,
             }
 
@@ -1168,7 +1184,7 @@ def gee_download_yearly_lst(
 
         return {
             "success": True,
-            "message": f"{year}年 LST 批量反演完成：{success_count}/12 个月成功",
+            "message": f"{year}年 LST 批量反演完成：{success_count}/{len(target_months)} 个月成功",
             "output_dir": output_dir,
             "year": year,
             "results": results,
@@ -1188,6 +1204,7 @@ def gee_download_multi_year_lst(
     output_dir: str,
     region: Any = None,
     region_path: Optional[str] = None,
+    region_name: str = "",
     scale: int = 30,
     project_id: Optional[str] = None,
     drive_folder: str = "",
@@ -1198,7 +1215,7 @@ def gee_download_multi_year_lst(
     跨多年单月 LST 批量反演。
 
     对 start_year~end_year 每一年的指定月份，执行分级降级选景 + 逐景 SCA 反演。
-    输出 N 个单波段 LST GeoTIFF（°C），文件名格式：{year}_{month:02d}_lst.tif
+    输出 N 个单波段 LST GeoTIFF（°C），文件名格式：{region_name}_{year}_{month:02d}_lst.tif
 
     典型用法：用户说"2020-2025年每年8月的地表温度"
     """
@@ -1238,7 +1255,7 @@ def gee_download_multi_year_lst(
             last_day = calendar.monthrange(year, month)[1]
             start_date = f"{year}-{month:02d}-01"
             end_date = f"{year}-{month:02d}-{last_day:02d}"
-            output_tif = os.path.join(output_dir, f"{year}_{month:02d}_lst.tif")
+            output_tif = os.path.join(output_dir, f"{region_name + '_' if region_name else ''}{year}_{month:02d}_lst.tif")
 
             try:
                 col8 = (
@@ -1326,7 +1343,7 @@ def gee_download_multi_year_lst(
                 else:
                     monthly_lst = lst_col.median().clip(geom)
 
-                filled = monthly_lst.focal_mean(radius=1, kernelType="square", units="pixels")
+                filled = monthly_lst.focal_mean(radius=3, kernelType="square", units="pixels")
                 monthly_lst = monthly_lst.unmask(filled).clip(geom)
                 export_img = monthly_lst.rename("LST")
 

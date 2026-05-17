@@ -30,11 +30,11 @@ export default function TaskPage() {
   useEffect(() => {
     if (currentTask?.status === 'running' || currentTask?.status === 'pending') {
       const interval = setInterval(() => {
-        fetchTask(currentTask.id)
+        fetchTask(currentTask.id, true)
       }, 5000)
       return () => clearInterval(interval)
     }
-  }, [currentTask, fetchTask])
+  }, [currentTask?.id, currentTask?.status, fetchTask])
 
   const handleCancel = async () => {
     if (currentTask) {

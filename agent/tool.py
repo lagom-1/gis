@@ -149,12 +149,14 @@ def build_task_filename(
     # 区域名
     if region_name:
         # 只取最后一级名称（如"四川省广元市旺苍县" → "旺苍县"）
+        best_idx = -1
         for sep in ["省", "市", "区", "县", "旗"]:
-            if sep in region_name:
-                idx = region_name.rfind(sep)
-                region_name = region_name[idx + 1:]
-                if region_name:
-                    break
+            idx = region_name.rfind(sep)
+            # 只取不在字符串末尾的分隔符（防止"旺苍县"→""）
+            if idx > best_idx and idx < len(region_name) - 1:
+                best_idx = idx
+        if best_idx >= 0:
+            region_name = region_name[best_idx + 1:]
         parts.append(_sanitize_filename(region_name))
 
     # 时间信息
@@ -376,11 +378,15 @@ def register_tools(registry: ToolRegistry, runtime: GISRuntime, preferences: Dic
         dir_name = build_task_filename(region_name=region_name, year=year, product="全年LST", suffix="")
         output_dir = args.get("output_dir") or str(out_dir() / dir_name)
 
+        months = args.get("months")  # 可选，如 [1,2,3,4,5,6]
+
         result = gee_download_yearly_lst(
             year=year,
             output_dir=output_dir,
             region=region,
             region_path=args.get("region_path"),
+            region_name=region_name,
+            months=months,
             scale=int(args.get("scale", 30)),
             project_id=args.get("project_id"),
             drive_folder=args.get("drive_folder") or GEE_DRIVE_FOLDER,
@@ -431,6 +437,7 @@ def register_tools(registry: ToolRegistry, runtime: GISRuntime, preferences: Dic
             output_dir=output_dir,
             region=region,
             region_path=args.get("region_path"),
+            region_name=region_name,
             scale=int(args.get("scale", 30)),
             project_id=args.get("project_id"),
             drive_folder=args.get("drive_folder") or GEE_DRIVE_FOLDER,
@@ -1487,9 +1494,10 @@ def register_tools(registry: ToolRegistry, runtime: GISRuntime, preferences: Dic
             "download_timeout": "等待下载/导出/同步的超时秒数，默认 1800",
         }, "data"),
 
-        ("gee_download_yearly_lst", "批量下载全年 12 个月的月度 LST。在 GEE 云端逐月执行分级降级选景 + 逐景 SCA 反演，输出 12 个单波段 LST GeoTIFF（°C）。需要先用 resolve_admin_region 设置研究区。", {
+        ("gee_download_yearly_lst", "批量下载全年（或指定月份）的月度 LST。在 GEE 云端逐月执行分级降级选景 + 逐景 SCA 反演。默认下载全年12个月，可通过 months 参数指定月份列表（如 [1,2,3,4,5,6]）。需要先用 resolve_admin_region 设置研究区。", {
             "year": "年份，如 2025",
-            "output_dir": "输出目录，存放 12 个月的 TIF 文件",
+            "months": "可选，要下载的月份列表，如 [1,2,3,4,5,6]。不传则默认全部 12 个月",
+            "output_dir": "输出目录，存放各月的 TIF 文件",
             "region": "AOI，可传 [xmin,ymin,xmax,ymax] 或 GeoJSON Feature",
             "region_path": "可选，本地 GeoJSON 文件路径",
             "scale": "导出分辨率，默认30",

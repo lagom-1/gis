@@ -152,23 +152,37 @@ def get_monthly_lst_collection(
 
     images = []
     skipped_years = []
+    cloud_levels = sorted(set([cloud_pct, 40, 60, 80, 100]))  # 渐进放宽云量阈值
     for year in range(start_year, end_year + 1):
         start = f"{year}-{month:02d}-01"
         end_day = _month_days(year, month)
         end = f"{year}-{month:02d}-{end_day}"
 
-        col = _landsat89_l2_collection(roi, start, end, cloud_pct)
+        # 渐进式云量降级：从用户指定阈值逐步放宽到 100%
+        col = None
+        count = 0
+        used_cloud_pct = cloud_pct
+        for level in cloud_levels:
+            col = _landsat89_l2_collection(roi, start, end, level)
+            count = col.size().getInfo()
+            if count > 0:
+                used_cloud_pct = level
+                break
 
-        # 检查影像数量，跳过空集合
-        count = col.size().getInfo()
         if count == 0:
             skipped_years.append(year)
-            print(f"[GEE Timelapse] 警告：{year}年{month}月无可用 Landsat 影像（云量<{cloud_pct}%），跳过")
+            print(f"[GEE Timelapse] 警告：{year}年{month}月无任何 Landsat 影像，跳过")
             continue
+
+        if used_cloud_pct > cloud_pct:
+            print(f"[GEE Timelapse] {year}年{month}月：原始云量阈值 {cloud_pct}% 无影像，已放宽至 {used_cloud_pct}%（找到 {count} 景）")
 
         col = col.map(_mask_clouds_qa)
         composite = col.median().clip(roi)
         lst = _compute_lst_gee(composite)
+        # 填补云掩膜造成的空洞（focal_mean radius=3, ~210m）
+        lst_filled = lst.focal_mean(radius=3, kernelType="square", units="pixels")
+        lst = lst.unmask(lst_filled)
         lst = lst.set("year", year)
         lst = lst.set("month", month)
         lst = lst.set("label", f"{year}年{month}月")
@@ -525,7 +539,7 @@ def generate_lst_timelapse_local(
         if os.path.exists(sca_tif) and os.path.getsize(sca_tif) > 1024:
             print(f"[Timelapse] {year}年{month}月：本地已有数据，跳过下载")
         else:
-            print(f"[Timelapse] {year}年{month}月：从 GEE 下载...")
+            print(f"[Timelapse] {year}年{month}月：从 GEE 下载（云量阈值 {cloud_pct}%）...")
             dl_result = gee_download_landsat_sca(
                 start_date=start_date,
                 end_date=end_date,

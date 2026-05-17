@@ -14,7 +14,7 @@ interface OutputPreviewProps {
   taskId?: number
 }
 
-export default function OutputPreview({ files }: OutputPreviewProps) {
+export default function OutputPreview({ files, taskId }: OutputPreviewProps) {
   const [previewImage, setPreviewImage] = useState<string | null>(null)
   const isArray = Array.isArray(files)
 
@@ -32,7 +32,11 @@ export default function OutputPreview({ files }: OutputPreviewProps) {
   }
 
   const isImageFile = (filename: string) => {
-    return filename.match(/\.(png|jpg|jpeg)$/i)
+    return filename.match(/\.(png|jpg|jpeg|tif|tiff)$/i)
+  }
+
+  const isTifFile = (filename: string) => {
+    return filename.match(/\.(tif|tiff)$/i)
   }
 
   const isGifFile = (filename: string) => {
@@ -40,13 +44,19 @@ export default function OutputPreview({ files }: OutputPreviewProps) {
   }
 
   const getFileUrl = (file: OutputFile) => {
-    // 使用 relative_path 保持子目录结构
     const filePath = file.relative_path || file.name
     return `/outputs/${filePath}`
   }
 
+  const getPreviewUrl = (file: OutputFile) => {
+    if (isTifFile(file.name) && taskId) {
+      return `/api/downloads/${taskId}/preview/${encodeURIComponent(file.name)}`
+    }
+    return getFileUrl(file)
+  }
+
   const handlePreview = (file: OutputFile) => {
-    setPreviewImage(getFileUrl(file))
+    setPreviewImage(getPreviewUrl(file))
   }
 
   if (isArray) {
@@ -74,15 +84,15 @@ export default function OutputPreview({ files }: OutputPreviewProps) {
             <div className="grid grid-cols-1 gap-4">
               {gifFiles.map((file) => (
                 <div
-                  key={file.name}
+                  key={file.relative_path || file.name}
                   className="bg-gray-50 rounded-lg overflow-hidden border"
                 >
                   <div
                     className="relative group cursor-pointer bg-black"
                     onClick={() => handlePreview(file)}
                   >
-                    <img
-                      src={getFileUrl(file)}
+                    <img loading="lazy"
+                      src={getPreviewUrl(file)}
                       alt={file.name}
                       className="w-full max-h-96 object-contain mx-auto"
                     />
@@ -118,15 +128,15 @@ export default function OutputPreview({ files }: OutputPreviewProps) {
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               {imageFiles.map((file) => (
                 <div
-                  key={file.name}
+                  key={file.relative_path || file.name}
                   className="bg-gray-50 rounded-lg overflow-hidden border"
                 >
                   <div
                     className="relative group cursor-pointer h-48 bg-gray-100"
                     onClick={() => handlePreview(file)}
                   >
-                    <img
-                      src={getFileUrl(file)}
+                    <img loading="lazy"
+                      src={getPreviewUrl(file)}
                       alt={file.name}
                       className="w-full h-full object-contain"
                     />
@@ -162,7 +172,7 @@ export default function OutputPreview({ files }: OutputPreviewProps) {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               {otherFiles.map((file) => (
                 <div
-                  key={file.name}
+                  key={file.relative_path || file.name}
                   className="flex items-center justify-between p-3 bg-gray-50 rounded-lg border"
                 >
                   <div className="flex items-center space-x-3 min-w-0">
@@ -198,7 +208,7 @@ export default function OutputPreview({ files }: OutputPreviewProps) {
               <X className="h-8 w-8" />
             </button>
             <div className="max-w-4xl max-h-full" onClick={(e) => e.stopPropagation()}>
-              <img
+              <img loading="lazy"
                 src={previewImage}
                 alt="预览"
                 className="max-w-full max-h-[90vh] object-contain"

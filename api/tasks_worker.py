@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 import traceback
 from datetime import datetime
@@ -74,8 +75,23 @@ def _setup_task_output_dir() -> Path:
     return OUTPUTS_DIR
 
 
+def _natural_sort_key(name: str) -> tuple:
+    """自然排序键：数字零位补齐，确保 1月 < 2月 < 10月，全部保持字符串避免类型比较错误"""
+    parts = []
+    for text, num in re.findall(r"(\D*)(\d+)", name):
+        if text:
+            parts.append(text)
+        if num:
+            parts.append(num.zfill(10))
+    # 处理末尾非数字部分
+    last = re.split(r"\d+", name)[-1]
+    if last:
+        parts.append(last)
+    return tuple(parts)
+
+
 def _collect_output_files(task_id: int, start_timestamp: float = None) -> list:
-    """收集任务产出的文件列表"""
+    """收集任务产出的文件列表，按文件名自然排序，不再限制数量"""
     from config import OUTPUTS_DIR
 
     output_dir = OUTPUTS_DIR
@@ -84,31 +100,45 @@ def _collect_output_files(task_id: int, start_timestamp: float = None) -> list:
     if not output_dir.exists():
         return files
 
-    # 递归搜索所有文件，按修改时间倒序
-    all_files = sorted(output_dir.rglob("*"), key=lambda p: p.stat().st_mtime, reverse=True)
+    # 递归搜索所有文件
+    all_files = sorted(
+        [p for p in output_dir.rglob("*") if p.is_file()],
+        key=lambda p: _natural_sort_key(p.name),
+    )
+
+    # 将当前任务的直接输出排在前面（不在子目录中的文件 + 最新子目录中的文件）
+    root_files = []
+    sub_files = []
 
     for f in all_files:
-        if f.is_file() and f.suffix.lower() in {".png", ".tif", ".tiff", ".jpg", ".html", ".csv", ".gif"}:
-            stat = f.stat()
-            modified = datetime.fromtimestamp(stat.st_mtime)
+        if f.suffix.lower() not in {".png", ".tif", ".tiff", ".jpg", ".jpeg", ".html", ".csv", ".gif"}:
+            continue
 
-            # 只收集任务开始后生成的文件
-            if start_timestamp and stat.st_mtime < start_timestamp:
-                continue
+        stat = f.stat()
+        # 只收集任务开始后生成的文件
+        if start_timestamp and stat.st_mtime < start_timestamp:
+            continue
 
-            # 使用相对于 OUTPUTS_DIR 的路径（前端代理需要）
-            relative_path = f.relative_to(OUTPUTS_DIR)
-            files.append({
-                "name": f.name,
-                "path": str(f),
-                "relative_path": str(relative_path),
-                "size": stat.st_size,
-                "modified": modified.isoformat(),
-            })
-        if len(files) >= 20:
-            break
+        modified = datetime.fromtimestamp(stat.st_mtime)
+        relative_path = f.relative_to(OUTPUTS_DIR)
+        entry = {
+            "name": f.name,
+            "path": str(f),
+            "relative_path": str(relative_path),
+            "size": stat.st_size,
+            "modified": modified.isoformat(),
+        }
 
-    return files
+        if str(relative_path) == f.name:
+            root_files.append(entry)
+        else:
+            sub_files.append(entry)
+
+    # 按名称自然排序：根目录文件在前，子目录文件在后
+    root_files.sort(key=lambda x: _natural_sort_key(x["name"]))
+    sub_files.sort(key=lambda x: _natural_sort_key(x["relative_path"]))
+
+    return root_files + sub_files
 
 
 _output_dir_lock = threading.Lock()

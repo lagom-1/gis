@@ -754,13 +754,6 @@ def generate_timelapse_web_map(
         except Exception:
             pass
 
-    # 自动在浏览器中打开
-    try:
-        import webbrowser
-        webbrowser.open("file://" + os.path.abspath(output_path))
-    except Exception:
-        pass
-
     return {
         "success": True,
         "message": f"交互式时间序列地图已生成: {output_path}",

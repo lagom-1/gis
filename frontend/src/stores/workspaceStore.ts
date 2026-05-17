@@ -107,12 +107,15 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       name: 'opengis-workspace',
       partialize: (state) => ({
         messages: state.messages,
-        currentOutput: state.currentOutput,
-        previousOutput: state.previousOutput,
+        sidebarCollapsed: state.sidebarCollapsed,
       }),
       merge: (persisted, current) => ({
         ...current,
         ...(persisted as Partial<WorkspaceState>),
+        currentOutput: [],
+        previousOutput: [],
+        previewFile: null,
+        showComparison: false,
         // 确保系统消息始终在开头，且时间戳刷新
         messages: (persisted as Partial<WorkspaceState>).messages?.length
           ? [

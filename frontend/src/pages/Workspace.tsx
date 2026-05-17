@@ -14,7 +14,9 @@ export default function Workspace() {
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const workspaceTaskIdRef = useRef<number | null>(null)
-  const { createTask, currentTask, fetchTask } = useTaskStore()
+  const { createTask, currentTask, fetchTask } = useTaskStore(
+    (s) => ({ createTask: s.createTask, currentTask: s.currentTask, fetchTask: s.fetchTask })
+  )
   const {
     messages,
     currentOutput,
@@ -35,15 +37,15 @@ export default function Workspace() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
-  // 轮询任务状态
+  // 轮询任务状态（silent 模式，不触发页面闪烁）
   useEffect(() => {
     if (!currentTask) return
     if (currentTask.id !== workspaceTaskIdRef.current) return
     if (currentTask.status === 'completed' || currentTask.status === 'failed') return
 
     const interval = setInterval(async () => {
-      await fetchTask(currentTask.id)
-    }, 3000)
+      await fetchTask(currentTask.id, true)
+    }, 5000)
     return () => clearInterval(interval)
   }, [currentTask?.id, currentTask?.status, fetchTask])
 
@@ -88,7 +90,7 @@ export default function Workspace() {
       processedTaskIds.add(currentTask.id)
       setIsProcessing(false)
     }
-  }, [currentTask?.status, currentTask?.id, messages])
+  }, [currentTask?.status, currentTask?.id])
 
   const handleSubmit = useCallback(async () => {
     if (!input.trim() || isProcessing) return
@@ -122,8 +124,15 @@ export default function Workspace() {
   }
 
   const getFileUrl = (file: OutputFile) => `/outputs/${file.relative_path || file.name}`
+  const getPreviewUrl = (file: OutputFile) => {
+    if (isTifFile(file.name) && currentTask?.id) {
+      return `/api/downloads/${currentTask.id}/preview/${encodeURIComponent(file.name)}`
+    }
+    return getFileUrl(file)
+  }
   const isGifFile = (name: string) => name.endsWith('.gif')
-  const isImageFile = (name: string) => /\.(png|jpg|jpeg)$/i.test(name)
+  const isImageFile = (name: string) => /\.(png|jpg|jpeg|tif|tiff)$/i.test(name)
+  const isTifFile = (name: string) => /\.(tif|tiff)$/i.test(name)
   const isHtmlFile = (name: string) => name.endsWith('.html')
 
   const formatSize = (bytes: number) => {
@@ -144,7 +153,7 @@ export default function Workspace() {
     <div className="mt-2 space-y-1">
       {files.map(f => (
         <button
-          key={f.name}
+          key={f.relative_path || f.name}
           onClick={() => handleFileClick(f)}
           className="flex items-center w-full text-left px-2 py-1 rounded hover:bg-white/50 transition-colors group"
         >
@@ -318,7 +327,7 @@ export default function Workspace() {
                   <h4 className="text-xs font-medium text-gray-500 uppercase tracking-wide">上次结果</h4>
                 </div>
                 <div className="flex-1 bg-white rounded-xl shadow-sm border overflow-hidden flex items-center justify-center p-2">
-                  <img src={getFileUrl(previousOutput[0])} alt="上次结果" className="max-w-full max-h-full object-contain" />
+                  <img loading="lazy" src={getPreviewUrl(previousOutput[0])} alt="上次结果" className="max-w-full max-h-full object-contain" />
                 </div>
               </div>
               <div className="flex flex-col min-h-0">
@@ -327,7 +336,7 @@ export default function Workspace() {
                 </div>
                 <div className="flex-1 bg-white rounded-xl shadow-sm border overflow-hidden flex items-center justify-center p-2">
                   {previewFile && (
-                    <img src={getFileUrl(previewFile)} alt="本次结果" className="max-w-full max-h-full object-contain" />
+                    <img loading="lazy" src={getPreviewUrl(previewFile)} alt="本次结果" className="max-w-full max-h-full object-contain" />
                   )}
                 </div>
               </div>
@@ -340,13 +349,13 @@ export default function Workspace() {
                   <div className={`${fullscreenPreview ? 'w-full h-full' : 'max-w-5xl'} bg-white rounded-xl shadow-lg overflow-hidden`}>
                     {isGifFile(previewFile.name) ? (
                       <img
-                        src={getFileUrl(previewFile)}
+                        src={getPreviewUrl(previewFile)}
                         alt={previewFile.name}
                         className="w-full h-auto max-h-[75vh] object-contain"
                       />
                     ) : (
                       <img
-                        src={getFileUrl(previewFile)}
+                        src={getPreviewUrl(previewFile)}
                         alt={previewFile.name}
                         className="w-full h-auto max-h-[75vh] object-contain"
                       />
@@ -360,7 +369,7 @@ export default function Workspace() {
                 <div className="mt-4 flex space-x-2 overflow-x-auto pb-2 justify-center">
                   {currentOutput.filter(f => isImageFile(f.name) || isGifFile(f.name)).map((file) => (
                     <button
-                      key={file.name}
+                      key={file.relative_path || file.name}
                       onClick={() => setPreviewFile(file)}
                       className={`flex-shrink-0 w-16 h-16 rounded-lg border-2 overflow-hidden transition-all ${
                         previewFile?.name === file.name
@@ -374,14 +383,14 @@ export default function Workspace() {
                           <Film className="h-5 w-5 text-green-500" />
                         </div>
                       ) : (
-                        <img src={getFileUrl(file)} alt={file.name} className="w-full h-full object-cover" />
+                        <img loading="lazy" src={getPreviewUrl(file)} alt={file.name} className="w-full h-full object-cover" />
                       )}
                     </button>
                   ))}
                   {/* 非图片文件 */}
                   {currentOutput.filter(f => !isImageFile(f.name) && !isGifFile(f.name)).map((file) => (
                     <button
-                      key={file.name}
+                      key={file.relative_path || file.name}
                       onClick={() => window.open(getFileUrl(file), '_blank')}
                       className="flex-shrink-0 w-16 h-16 rounded-lg border-2 border-gray-200 hover:border-gray-400 overflow-hidden transition-all flex items-center justify-center bg-gray-50"
                       title={file.name}
