@@ -3,7 +3,8 @@ import { Send, Loader2, Image as ImageIcon, Film, BarChart3, ChevronLeft, Chevro
 import { useTaskStore } from '../stores/taskStore'
 import { useWorkspaceStore, type OutputFile } from '../stores/workspaceStore'
 import { tasksService } from '../services/tasks'
-import ImageViewer from '../components/ImageViewer'
+import ViewerRouter from '../components/ViewerRouter'
+import CompareSlider from '../components/CompareSlider'
 import toast from 'react-hot-toast'
 
 // 已处理过的任务 ID 集合（模块级，跨挂载持久）
@@ -202,8 +203,10 @@ export default function Workspace() {
   }
 
   const handleFileClick = (file: OutputFile) => {
-    if (isImageFile(file.name) || isGifFile(file.name)) {
+    if (isImageFile(file.name) || isGifFile(file.name) || isHtmlFile(file.name) || file.name.endsWith('.csv')) {
       setPreviewFile(file)
+      // 非图片文件退出对比模式
+      if (!isImageFile(file.name)) setShowComparison(false)
     } else {
       window.open(getFileUrl(file), '_blank')
     }
@@ -435,7 +438,7 @@ export default function Workspace() {
             )}
           </div>
           <div className="flex items-center space-x-2">
-            {previousOutput.length > 0 && currentOutput.length > 0 && (
+            {previousOutput.length > 0 && currentOutput.length > 0 && previewFile && isImageFile(previewFile.name) && (
               <button
                 onClick={() => setShowComparison(!showComparison)}
                 className={`px-3 py-1.5 text-xs rounded-lg font-medium transition-colors ${
@@ -468,37 +471,31 @@ export default function Workspace() {
               </div>
             </div>
           ) : showComparison && previousOutput.length > 0 ? (
-            /* 对比视图 */
-            <div className="grid grid-cols-2 gap-4 h-full">
-              <div className="flex flex-col min-h-0">
-                <div className="flex items-center justify-between mb-2">
-                  <h4 className="text-xs font-medium text-gray-500 uppercase tracking-wide">上次结果</h4>
-                </div>
-                <div className="flex-1 bg-white rounded-xl shadow-sm border overflow-hidden">
-                  <ImageViewer src={getPreviewUrl(previousOutput[0])} alt="上次结果" />
-                </div>
+            /* 对比视图 — 使用滑块对比 */
+            <div className="h-full flex flex-col">
+              <div className="flex items-center justify-between mb-2">
+                <h4 className="text-xs font-medium text-gray-500 uppercase tracking-wide">对比模式 · 拖拽中线查看差异</h4>
               </div>
-              <div className="flex flex-col min-h-0">
-                <div className="flex items-center justify-between mb-2">
-                  <h4 className="text-xs font-medium text-gray-500 uppercase tracking-wide">本次结果</h4>
-                </div>
-                <div className="flex-1 bg-white rounded-xl shadow-sm border overflow-hidden">
-                  {previewFile && (
-                    <ImageViewer src={getPreviewUrl(previewFile)} alt="本次结果" />
-                  )}
-                </div>
+              <div className="flex-1 bg-white rounded-xl shadow-sm border overflow-hidden min-h-0">
+                {previewFile && (
+                  <CompareSlider
+                    srcBefore={getPreviewUrl(previousOutput[0])}
+                    srcAfter={getPreviewUrl(previewFile)}
+                    labelBefore="上次"
+                    labelAfter="本次"
+                  />
+                )}
               </div>
             </div>
           ) : (
-            /* 单图预览 */
+            /* 智能查看器 — 根据文件类型自动切换 */
             <div className="h-full flex flex-col">
               <div className="flex-1 flex items-center justify-center min-h-0">
                 {previewFile && (
                   <div className={`${fullscreenPreview ? 'w-full h-full' : 'max-w-5xl w-full'} bg-white rounded-xl shadow-lg overflow-hidden`}>
-                    <ImageViewer
+                    <ViewerRouter
+                      file={previewFile}
                       src={getPreviewUrl(previewFile)}
-                      alt={previewFile.name}
-                      className={fullscreenPreview ? 'h-full' : 'h-[65vh]'}
                     />
                   </div>
                 )}
