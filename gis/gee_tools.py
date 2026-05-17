@@ -209,7 +209,7 @@ def _landsat89_l2_collection(region_geom, start_date: str, end_date: str, cloud_
 
 def _reduce_collection(col, reducer: str = "median", mask_clouds: bool = True) -> ee.Image:
     if mask_clouds:
-        col = col.map(__mask_clouds_qa)
+        col = col.map(_mask_clouds_qa)
 
     reducer = (reducer or "median").lower()
     if reducer == "mean":
@@ -1005,7 +1005,7 @@ def gee_download_monthly_lst(
             }
 
         # ── 2. 逐景 QA_PIXEL 去云 + SCA 单通道 LST 反演 ───
-        col_masked = selected_col.map(__mask_clouds_qa)
+        col_masked = selected_col.map(_mask_clouds_qa)
         lst_col = col_masked.map(_compute_lst_gee)
 
         # ── 3. 合成 ───────────────────────────────────────
@@ -1241,7 +1241,7 @@ def gee_download_yearly_lst(
                     continue
 
                 # 逐景去云 + SCA 反演 + 合成
-                col_masked = selected_col.map(__mask_clouds_qa)
+                col_masked = selected_col.map(_mask_clouds_qa)
                 lst_col = col_masked.map(_compute_lst_gee)
 
                 if selected_method == "mean":
@@ -1472,7 +1472,7 @@ def gee_download_multi_year_lst(
                     failed_years.append({"year": year, "reason": "无满足条件的影像"})
                     continue
 
-                col_masked = selected_col.map(__mask_clouds_qa)
+                col_masked = selected_col.map(_mask_clouds_qa)
                 lst_col = col_masked.map(_compute_lst_gee)
 
                 if selected_method == "mean":
