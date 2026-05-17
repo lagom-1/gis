@@ -31,16 +31,15 @@ function renderMarkdown(text: string): string {
 
 export default function Workspace() {
   const [input, setInput] = useState('')
-  const [isProcessing, setIsProcessing] = useState(false)
   const [fullscreenPreview, setFullscreenPreview] = useState(false)
   const [executionStep, setExecutionStep] = useState(0)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
-  const workspaceTaskIdRef = useRef<number | null>(null)
   const abortRef = useRef<AbortController | null>(null)
   const mountedRef = useRef(true)
   const stepTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const resumeAttemptedRef = useRef(false)
   const { createTask, currentTask } = useTaskStore(
     (s) => ({ createTask: s.createTask, currentTask: s.currentTask })
   )
@@ -51,12 +50,15 @@ export default function Workspace() {
     previewFile,
     showComparison,
     sidebarCollapsed,
+    isProcessing,
+    activeTaskId,
     addMessage,
     clearMessages,
     setCurrentOutput,
     setPreviewFile,
     setShowComparison,
     setSidebarCollapsed,
+    setProcessing,
   } = useWorkspaceStore()
 
   const formatSize = (bytes: number) => {
@@ -90,15 +92,93 @@ export default function Workspace() {
     }
   }, [input])
 
-  // 组件卸载时取消轮询
+  // 组件卸载时取消轮询（导航离开时不取消 — 保留后台执行状态）
   useEffect(() => {
     mountedRef.current = true
     return () => {
       mountedRef.current = false
-      abortRef.current?.abort()
+      // 不再 abort 轮询 — 让它在后台继续运行
+      // 进度模拟器也保留
       if (stepTimerRef.current) clearInterval(stepTimerRef.current)
     }
   }, [])
+
+  // 挂载时恢复任务执行状态
+  useEffect(() => {
+    if (resumeAttemptedRef.current) return
+    if (!activeTaskId || !isProcessing) return
+
+    resumeAttemptedRef.current = true
+    const abortController = new AbortController()
+    abortRef.current = abortController
+
+    const resumePolling = async () => {
+      let task = await tasksService.getTask(activeTaskId)
+      if (task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled') {
+        // 任务已结束，清理状态
+        setProcessing(false, null)
+        stopStepSimulation()
+        if (task.status === 'completed') {
+          useTaskStore.setState({ currentTask: task })
+          const files = (task.output_files || []) as OutputFile[]
+          if (files.length > 0) {
+            setCurrentOutput(files)
+            const gifFile = files.find((f: OutputFile) => f.name.endsWith('.gif'))
+            const mapFile = files.find((f: OutputFile) => f.name.includes('_map.png'))
+            const lstFile = files.find((f: OutputFile) => f.name.includes('_lst.png'))
+            setPreviewFile(gifFile || mapFile || lstFile || files[0])
+          }
+          const answer = task.final_answer
+          if (answer && answer.trim()) {
+            addMessage({ role: 'assistant', content: answer, taskId: task.id })
+          }
+          processedTaskIds.add(task.id)
+        }
+        return
+      }
+      // 任务仍在执行，恢复进度动画和轮询
+      startStepSimulation()
+      const maxWait = 300000
+      const pollInterval = 2000
+      const startTime = Date.now()
+      while (task.status !== 'completed' && task.status !== 'failed' && task.status !== 'cancelled') {
+        if (Date.now() - startTime > maxWait) {
+          addMessage({ role: 'assistant', content: '⏰ 任务执行超时，请稍后在任务列表查看结果。', taskId: task.id })
+          setProcessing(false, null)
+          stopStepSimulation()
+          return
+        }
+        try {
+          await new Promise((resolve, reject) => {
+            const t = setTimeout(resolve, pollInterval)
+            abortController.signal.addEventListener('abort', () => {
+              clearTimeout(t)
+              reject(new DOMException('已取消', 'AbortError'))
+            })
+          })
+        } catch { return }
+        task = await tasksService.getTask(activeTaskId)
+      }
+      stopStepSimulation()
+      setProcessing(false, null)
+      if (task.status === 'completed') {
+        useTaskStore.setState({ currentTask: task })
+        const files = (task.output_files || []) as OutputFile[]
+        if (files.length > 0) {
+          setCurrentOutput(files)
+          const gifFile = files.find((f: OutputFile) => f.name.endsWith('.gif'))
+          const mapFile = files.find((f: OutputFile) => f.name.includes('_map.png'))
+          setPreviewFile(gifFile || mapFile || files[0])
+        }
+        const answer = task.final_answer
+        if (answer && answer.trim()) {
+          addMessage({ role: 'assistant', content: answer, taskId: task.id })
+        }
+        processedTaskIds.add(task.id)
+      }
+    }
+    resumePolling()
+  }, [activeTaskId, isProcessing])
 
   // 模拟执行进度（后端暂不暴露中间步骤，用时间估算）
   const startStepSimulation = () => {
@@ -119,7 +199,8 @@ export default function Workspace() {
 
     const userMessage = input
     setInput('')
-    setIsProcessing(true)
+    setProcessing(true)
+    resumeAttemptedRef.current = false
     startStepSimulation()
 
     addMessage({ role: 'user', content: userMessage })
@@ -130,7 +211,7 @@ export default function Workspace() {
 
     try {
       let task = await createTask({ input_text: userMessage })
-      workspaceTaskIdRef.current = task.id
+      setProcessing(true, task.id)  // 更新 taskId
 
       const maxWait = 300000
       const pollInterval = 2000
@@ -139,7 +220,7 @@ export default function Workspace() {
       while (task.status !== 'completed' && task.status !== 'failed' && task.status !== 'cancelled') {
         if (Date.now() - startTime > maxWait) {
           addMessage({ role: 'assistant', content: '⏰ 任务执行超时，请稍后在任务列表查看结果。', taskId: task.id })
-          setIsProcessing(false)
+          setProcessing(false, null)
           stopStepSimulation()
           return
         }
@@ -160,6 +241,7 @@ export default function Workspace() {
 
       if (abortController.signal.aborted || !mountedRef.current) return
       stopStepSimulation()
+      setProcessing(false, null)
 
       useTaskStore.setState({ currentTask: task })
 
@@ -189,17 +271,17 @@ export default function Workspace() {
       toast.error('任务提交失败')
       addMessage({ role: 'assistant', content: '**任务提交失败**，请检查后端服务是否正常。' })
     } finally {
-      setIsProcessing(false)
+      setProcessing(false, null)
       stopStepSimulation()
     }
-  }, [input, isProcessing, addMessage, createTask, setCurrentOutput, setPreviewFile])
+  }, [input, isProcessing, addMessage, createTask, setCurrentOutput, setPreviewFile, setProcessing])
 
   const handleClearChat = () => {
     clearMessages()
     setCurrentOutput([])
     setPreviewFile(null)
+    setProcessing(false, null)
     processedTaskIds.clear()
-    workspaceTaskIdRef.current = null
   }
 
   const handleFileClick = (file: OutputFile) => {

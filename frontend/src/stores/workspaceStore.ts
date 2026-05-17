@@ -24,6 +24,8 @@ interface WorkspaceState {
   previewFile: OutputFile | null
   showComparison: boolean
   sidebarCollapsed: boolean
+  isProcessing: boolean
+  activeTaskId: number | null
 
   addMessage: (message: Omit<Message, 'id' | 'timestamp'>) => void
   loadProjectMessages: (msgs: Array<{ role: string; content: string; timestamp: string; task_id?: number }>) => void
@@ -33,6 +35,7 @@ interface WorkspaceState {
   setPreviewFile: (file: OutputFile | null) => void
   setShowComparison: (show: boolean) => void
   setSidebarCollapsed: (collapsed: boolean) => void
+  setProcessing: (processing: boolean, taskId?: number | null) => void
   reset: () => void
 }
 
@@ -50,6 +53,8 @@ const initialState = {
   previewFile: null as OutputFile | null,
   showComparison: false,
   sidebarCollapsed: false,
+  isProcessing: false,
+  activeTaskId: null as number | null,
 }
 
 export const useWorkspaceStore = create<WorkspaceState>()(
@@ -98,6 +103,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       setPreviewFile: (file) => set({ previewFile: file }),
       setShowComparison: (show) => set({ showComparison: show }),
       setSidebarCollapsed: (collapsed) => set({ sidebarCollapsed: collapsed }),
+      setProcessing: (processing, taskId) => set({ isProcessing: processing, activeTaskId: taskId ?? null }),
 
       reset: () => {
         set(initialState)
@@ -116,6 +122,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         previousOutput: [],
         previewFile: null,
         showComparison: false,
+        isProcessing: false,  // 不恢复执行状态
+        activeTaskId: null,
         // 确保系统消息始终在开头，且时间戳刷新
         messages: (persisted as Partial<WorkspaceState>).messages?.length
           ? [
