@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import ee
 
-from agent.gee_client import init_gee
+from gis.gee.client import init_gee
 
 
 # ============================================================

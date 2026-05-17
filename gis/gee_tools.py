@@ -11,7 +11,7 @@ from typing import Any, Dict, Optional
 
 import ee
 
-from agent.gee_client import init_gee
+from gis.gee.client import init_gee
 from config import GEE_DRIVE_FOLDER, GDRIVE_SYNC_DIR
 
 

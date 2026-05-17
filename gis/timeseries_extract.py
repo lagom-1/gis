@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional
 
 import ee
 
-from agent.gee_client import init_gee
+from gis.gee.client import init_gee
 
 
 def extract_timeseries_to_point(

@@ -26,7 +26,7 @@ from typing import Any, Dict, List, Optional
 
 import ee
 
-from agent.gee_client import init_gee
+from gis.gee.client import init_gee
 
 # Dynamic World 分类标签和颜色
 DW_CLASSES = {

@@ -514,7 +514,7 @@ def register_tools(registry: ToolRegistry, runtime: GISRuntime, preferences: Dic
             }
 
         # 【关键】先初始化 GEE，失败则明确提示用户执行 gee_init
-        from agent.gee_client import init_gee
+        from gis.gee.client import init_gee
         init_result = init_gee()
         if not init_result.get("success"):
             return {
@@ -572,7 +572,7 @@ def register_tools(registry: ToolRegistry, runtime: GISRuntime, preferences: Dic
         if roi is None:
             return {"success": False, "message": "缺少研究区。请先用 resolve_admin_region 解析行政区边界。"}
 
-        from agent.gee_client import init_gee
+        from gis.gee.client import init_gee
         init_result = init_gee()
         if not init_result.get("success"):
             return {
@@ -619,7 +619,7 @@ def register_tools(registry: ToolRegistry, runtime: GISRuntime, preferences: Dic
         if roi is None:
             return {"success": False, "message": "缺少研究区。请先用 resolve_admin_region 解析行政区边界。"}
 
-        from agent.gee_client import init_gee
+        from gis.gee.client import init_gee
         init_result = init_gee()
         if not init_result.get("success"):
             return {
@@ -665,7 +665,7 @@ def register_tools(registry: ToolRegistry, runtime: GISRuntime, preferences: Dic
         if roi is None:
             return {"success": False, "message": "缺少研究区。请先用 resolve_admin_region 解析行政区边界。"}
 
-        from agent.gee_client import init_gee
+        from gis.gee.client import init_gee
         init_result = init_gee()
         if not init_result.get("success"):
             return {
@@ -738,7 +738,7 @@ def register_tools(registry: ToolRegistry, runtime: GISRuntime, preferences: Dic
 
     def _ensure_gee() -> Dict[str, Any] | None:
         """确保 GEE 已初始化，返回 None 表示成功，否则返回错误 dict"""
-        from agent.gee_client import init_gee
+        from gis.gee.client import init_gee
         result = init_gee()
         if not result.get("success"):
             return {
