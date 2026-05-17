@@ -30,7 +30,6 @@ function renderMarkdown(text: string): string {
 
 export default function Workspace() {
   const [input, setInput] = useState('')
-  const [fullscreenPreview, setFullscreenPreview] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const abortRef = useRef<AbortController | null>(null)
@@ -376,7 +375,7 @@ export default function Workspace() {
               </div>
             </div>
 
-            {activeTab === 'chat' && (
+            {activeTab === 'chat' && (<>
             <div className="flex-1 overflow-y-auto p-4 space-y-4">
               {messages.map((msg) => (
                 <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
@@ -465,10 +464,10 @@ export default function Workspace() {
                 </button>
               </div>
             </div>
-            )}
+            </>)}
 
             {/* 历史任务面板 */}
-            {activeTab === 'history' && (
+            {activeTab === 'history' && (<>
             <div className="flex-1 overflow-y-auto p-3 space-y-2">
               {recentTasks.length === 0 ? (
                 <div className="text-center py-8 text-gray-400">
@@ -500,7 +499,7 @@ export default function Workspace() {
                 </button>
               ))}
             </div>
-            )}
+            </>)}
           </>
         )}
       </div>
