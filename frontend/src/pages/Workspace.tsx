@@ -15,6 +15,8 @@ export default function Workspace() {
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const workspaceTaskIdRef = useRef<number | null>(null)
+  const abortRef = useRef<AbortController | null>(null)
+  const mountedRef = useRef(true)
   const { createTask, currentTask } = useTaskStore(
     (s) => ({ createTask: s.createTask, currentTask: s.currentTask })
   )
@@ -39,7 +41,7 @@ export default function Workspace() {
     return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
   }
 
-  const getFileUrl = (file: OutputFile) => `/outputs/${file.relative_path || file.name}`
+  const getFileUrl = (file: OutputFile) => `/api/downloads/${currentTask?.id}/${encodeURIComponent(file.name)}`
   const getPreviewUrl = (file: OutputFile) => {
     if (isTifFile(file.name) && currentTask?.id) {
       return `/api/downloads/${currentTask.id}/preview/${encodeURIComponent(file.name)}`
@@ -56,6 +58,15 @@ export default function Workspace() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
+  // 组件卸载时取消轮询
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      abortRef.current?.abort()
+    }
+  }, [])
+
   const handleSubmit = useCallback(async () => {
     if (!input.trim() || isProcessing) return
 
@@ -65,11 +76,15 @@ export default function Workspace() {
 
     addMessage({ role: 'user', content: userMessage })
 
+    // 取消之前的轮询
+    abortRef.current?.abort()
+    const abortController = new AbortController()
+    abortRef.current = abortController
+
     try {
       let task = await createTask({ input_text: userMessage })
       workspaceTaskIdRef.current = task.id
 
-      // 主动轮询任务状态直到完成或失败（不依赖 useEffect 的时机）
       const maxWait = 300000 // 最长等 5 分钟
       const pollInterval = 2000 // 每 2 秒查一次
       const startTime = Date.now()
@@ -80,9 +95,23 @@ export default function Workspace() {
           setIsProcessing(false)
           return
         }
-        await new Promise(resolve => setTimeout(resolve, pollInterval))
+        // 支持取消
+        try {
+          await new Promise((resolve, reject) => {
+            const t = setTimeout(resolve, pollInterval)
+            abortController.signal.addEventListener('abort', () => {
+              clearTimeout(t)
+              reject(new DOMException('已取消', 'AbortError'))
+            })
+          })
+        } catch {
+          if (!mountedRef.current) return
+        }
+        if (abortController.signal.aborted) return
         task = await tasksService.getTask(task.id)
       }
+
+      if (abortController.signal.aborted || !mountedRef.current) return
 
       // 任务完成：更新 store 并显示结果
       useTaskStore.setState({ currentTask: task })

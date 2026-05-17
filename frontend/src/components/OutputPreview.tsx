@@ -44,8 +44,7 @@ export default function OutputPreview({ files, taskId }: OutputPreviewProps) {
   }
 
   const getFileUrl = (file: OutputFile) => {
-    const filePath = file.relative_path || file.name
-    return `/outputs/${filePath}`
+    return `/api/downloads/${taskId}/${encodeURIComponent(file.name)}`
   }
 
   const getPreviewUrl = (file: OutputFile) => {

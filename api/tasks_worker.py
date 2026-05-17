@@ -30,7 +30,7 @@ except ImportError:
 
 
 def _update_task_status(task_id: int, status: str, **kwargs) -> None:
-    """更新数据库中的任务状态"""
+    """更新数据库中的任务状态，同时检查任务是否已被取消"""
     from api.database import SessionLocal
     from api.models import Task, TaskStatus
 
@@ -39,6 +39,11 @@ def _update_task_status(task_id: int, status: str, **kwargs) -> None:
         task = db.query(Task).filter(Task.id == task_id).first()
         if task is None:
             logger.error(f"任务 {task_id} 不存在")
+            return
+
+        # 防止已取消的任务被覆盖为 completed/failed
+        if task.status == TaskStatus.CANCELLED and status in ("completed", "failed"):
+            logger.warning(f"任务 {task_id} 已被用户取消，忽略状态更新为 {status}")
             return
 
         task.status = TaskStatus(status)
@@ -149,20 +154,13 @@ def _execute_gis_task(task_id: int, input_text: str, celery_task_id: str = None)
     logger.info(f"开始执行任务 {task_id}: {input_text}")
 
     import time
-    import config as app_config
     task_start_timestamp = time.time()
 
-    # 注意：running 状态由调用方设置（tasks.py 的线程函数或 Celery task）
     if celery_task_id:
         _update_task_status(task_id, "running", celery_task_id=celery_task_id)
 
-    # 使用输出目录（加锁避免竞争）
     output_dir = _setup_task_output_dir()
     logger.info(f"任务 {task_id} 输出目录: {output_dir}")
-
-    with _output_dir_lock:
-        original_outputs_dir = app_config.OUTPUTS_DIR
-        app_config.OUTPUTS_DIR = output_dir
 
     try:
         # 初始化 GEE（带锁避免并发初始化）
@@ -170,6 +168,8 @@ def _execute_gis_task(task_id: int, input_text: str, celery_task_id: str = None)
         gee_result = init_gee()
         if not gee_result.get("success"):
             raise RuntimeError(f"GEE 初始化失败: {gee_result.get('message')}")
+
+        import config as app_config
 
         from agent.core import GISAgent
 
@@ -211,9 +211,6 @@ def _execute_gis_task(task_id: int, input_text: str, celery_task_id: str = None)
             "task_id": task_id,
             "error": error_msg,
         }
-    finally:
-        with _output_dir_lock:
-            app_config.OUTPUTS_DIR = original_outputs_dir
 
 
 if HAS_CELERY:

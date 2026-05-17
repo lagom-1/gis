@@ -30,9 +30,9 @@ def run_sca(input_tif: str, output_tif: str, output_png: str) -> dict:
             nir = np.where(nir == nodata, np.nan, nir)
             bt = np.where(bt == nodata, np.nan, bt)
 
-        # 2) 兜底：Landsat L2 的无效像元通常是 0，
-        #    geemap 导出可能不设 nodata tag，需要额外过滤
-        zero_mask = (red == 0) | (nir == 0) | (bt == 0)
+        # 2) 兜底：仅过滤所有波段同时为 0 的像素（真正的无效像元）
+        #    单独某波段为 0 可能是有效值（如水体反射率接近 0）
+        zero_mask = (red == 0) & (nir == 0) & (bt == 0)
         if zero_mask.any():
             red = np.where(zero_mask, np.nan, red)
             nir = np.where(zero_mask, np.nan, nir)

@@ -15,10 +15,14 @@ const examples = [
 
 export default function TaskInput({ onSubmit, isLoading }: TaskInputProps) {
   const [text, setText] = useState('')
+  const maxLength = 2000
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!text.trim() || isLoading) return
+    if (text.length > maxLength) {
+      return
+    }
     await onSubmit(text.trim())
     setText('')
   }
@@ -32,11 +36,13 @@ export default function TaskInput({ onSubmit, isLoading }: TaskInputProps) {
           </label>
           <textarea
             value={text}
-            onChange={(e) => setText(e.target.value)}
+            onChange={(e) => setText(e.target.value.slice(0, maxLength))}
             placeholder="例如：找到 Beijing 的 TIF 文件，做温度反演并制图"
             className="w-full h-32 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent resize-none"
             disabled={isLoading}
+            maxLength={maxLength}
           />
+          <p className="text-xs text-gray-400 mt-1 text-right">{text.length}/{maxLength}</p>
         </div>
         <button
           type="submit"

@@ -39,7 +39,9 @@ export default function PaymentModal({ isOpen, onClose, onPay, isLoading }: Paym
               选择下载方案
             </h3>
             <div className="space-y-3">
-              {(Object.entries(PRICING_TIERS) as [PricingTier, typeof PRICING_TIERS.free][]).map(
+              {(Object.entries(PRICING_TIERS) as [PricingTier, typeof PRICING_TIERS.free][]).filter(
+                ([key]) => key !== 'free'  // 免费层级无需支付，隐藏
+              ).map(
                 ([key, tier]) => (
                   <button
                     key={key}

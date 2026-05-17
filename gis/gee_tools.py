@@ -147,17 +147,7 @@ def _normalize_region(region: Any = None, region_path: Optional[str] = None):
     raise ValueError("region 仅支持 bbox [xmin,ymin,xmax,ymax]、GeoJSON dict 或 region_path")
 
 
-def _mask_clouds_qa(image: ee.Image) -> ee.Image:
-    """
-    Landsat Collection 2 QA_PIXEL 云掩膜：
-      Bit 3: Cloud
-      Bit 4: Cloud Shadow
-    """
-    qa = image.select("QA_PIXEL")
-    cloud_bit = 1 << 3
-    shadow_bit = 1 << 4
-    mask = qa.bitwiseAnd(cloud_bit).eq(0).And(qa.bitwiseAnd(shadow_bit).eq(0))
-    return image.updateMask(mask)
+from ._gee_common import mask_clouds_qa as _mask_clouds_qa
 
 
 def _landsat89_l2_collection(region_geom, start_date: str, end_date: str, cloud_pct: float = 15, hard_filter: bool = True, max_scenes: int | None = None, distribute_periods: int | None = None):
@@ -219,7 +209,7 @@ def _landsat89_l2_collection(region_geom, start_date: str, end_date: str, cloud_
 
 def _reduce_collection(col, reducer: str = "median", mask_clouds: bool = True) -> ee.Image:
     if mask_clouds:
-        col = col.map(_mask_clouds_qa)
+        col = col.map(__mask_clouds_qa)
 
     reducer = (reducer or "median").lower()
     if reducer == "mean":
@@ -866,7 +856,7 @@ def gee_download_monthly_lst(
             }
 
         # ── 2. 逐景 QA_PIXEL 去云 + SCA 单通道 LST 反演 ───
-        col_masked = selected_col.map(_mask_clouds_qa)
+        col_masked = selected_col.map(__mask_clouds_qa)
         lst_col = col_masked.map(_compute_lst_gee)
 
         # ── 3. 合成 ───────────────────────────────────────
@@ -1102,7 +1092,7 @@ def gee_download_yearly_lst(
                     continue
 
                 # 逐景去云 + SCA 反演 + 合成
-                col_masked = selected_col.map(_mask_clouds_qa)
+                col_masked = selected_col.map(__mask_clouds_qa)
                 lst_col = col_masked.map(_compute_lst_gee)
 
                 if selected_method == "mean":
@@ -1333,7 +1323,7 @@ def gee_download_multi_year_lst(
                     failed_years.append({"year": year, "reason": "无满足条件的影像"})
                     continue
 
-                col_masked = selected_col.map(_mask_clouds_qa)
+                col_masked = selected_col.map(__mask_clouds_qa)
                 lst_col = col_masked.map(_compute_lst_gee)
 
                 if selected_method == "mean":

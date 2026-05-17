@@ -41,11 +41,20 @@ def find_local_files(
         if t and len(t) >= MIN_TOKEN_LENGTH
     ]
 
+    import time
+    search_deadline = time.time() + 30  # 最多搜索 30 秒
+
     for root in roots:
         if not os.path.exists(root):
             continue
+        # 跳过盘符根目录，太昂贵
+        root_path = Path(root).resolve()
+        if str(root_path) in {r"C:\", r"D:\", r"E:\", r"G:\", "C:\\", "D:\\", "E:\\", "G:\\"}:
+            continue
         root_depth = root.count(os.sep)
         for dirpath, dirnames, filenames in os.walk(root):
+            if time.time() > search_deadline:
+                break
             # 限制搜索深度
             current_depth = dirpath.count(os.sep) - root_depth
             if current_depth >= MAX_WALK_DEPTH:

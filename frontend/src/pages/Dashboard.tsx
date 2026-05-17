@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import TaskCard from '../components/TaskCard'
 import LoadingSpinner from '../components/LoadingSpinner'
 import { useTaskStore } from '../stores/taskStore'
@@ -16,10 +16,30 @@ const statusFilters = [
 export default function Dashboard() {
   const { tasks, isLoading, fetchTasks } = useTaskStore()
   const [statusFilter, setStatusFilter] = useState('')
+  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   useEffect(() => {
     fetchTasks({ status: statusFilter || undefined })
   }, [fetchTasks, statusFilter])
+
+  // 有运行中的任务时自动刷新
+  useEffect(() => {
+    const hasRunning = tasks.some(t => t.status === 'running' || t.status === 'pending')
+    if (hasRunning && !pollTimerRef.current) {
+      pollTimerRef.current = setInterval(() => {
+        fetchTasks({ status: statusFilter || undefined })
+      }, 5000)
+    } else if (!hasRunning && pollTimerRef.current) {
+      clearInterval(pollTimerRef.current)
+      pollTimerRef.current = null
+    }
+    return () => {
+      if (pollTimerRef.current) {
+        clearInterval(pollTimerRef.current)
+        pollTimerRef.current = null
+      }
+    }
+  }, [tasks, fetchTasks, statusFilter])
 
   return (
     <div className="space-y-6">

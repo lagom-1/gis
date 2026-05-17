@@ -116,12 +116,17 @@ DATABASE_URL = os.getenv(
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
 # ── JWT 配置 ──────────────────────────────────────────
-SECRET_KEY = os.getenv("SECRET_KEY", "opengis-dev-secret-key-change-in-production")
+SECRET_KEY = os.getenv("SECRET_KEY", "")
+if not SECRET_KEY:
+    import sys
+    print("⚠️  未设置 SECRET_KEY 环境变量！请设置后重启。", file=sys.stderr)
+    print("   示例: export SECRET_KEY=$(openssl rand -hex 32)", file=sys.stderr)
+    SECRET_KEY = "opengis-dev-secret-key-change-in-production"
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_MINUTES = int(os.getenv("JWT_EXPIRE_MINUTES", "1440"))  # 默认 24 小时
 
 # ── CORS 配置 ─────────────────────────────────────────
-CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:5173").split(",")
+CORS_ORIGINS = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:5173").split(",")]
 
 # ── 支付配置 ────────────────────────────────────────────
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")

@@ -265,17 +265,11 @@ def verify_webhook_event(payload: bytes, sig_header: str) -> stripe.Event:
     _init_stripe()
 
     if not config.STRIPE_WEBHOOK_SECRET:
-        logger.warning("STRIPE_WEBHOOK_SECRET 未配置，跳过签名验证（仅限开发环境）")
-        # 开发环境：不验证签名，直接解析
-        try:
-            import json
-            event_data = json.loads(payload)
-            return stripe.Event.construct_from(event_data, stripe.api_key)
-        except Exception as e:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"无效的 webhook 负载: {str(e)}",
-            )
+        logger.error("STRIPE_WEBHOOK_SECRET 未配置，拒绝 webhook 请求")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="服务器支付配置未完成，请联系管理员",
+        )
 
     try:
         event = stripe.Webhook.construct_event(

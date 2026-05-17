@@ -90,6 +90,11 @@ class LLMClient:
 
     def __init__(self) -> None:
         self._llm = get_llm()
+        if self._llm is None:
+            raise RuntimeError(
+                "LLM 客户端初始化失败：无法连接到 DashScope API。"
+                "请检查 DASHSCOPE_API_KEY 环境变量和网络连接。"
+            )
 
     @staticmethod
     def _strip_fences(text: str) -> str:
@@ -114,11 +119,12 @@ class LLMClient:
 
         input_str = json.dumps(payload, ensure_ascii=False)
 
-        # 最多尝试 3 次，指数退避：1s, 3s
+        # 最多尝试 3 次，指数退避：1s, 5s
+        # LLM 调用设置 120 秒超时，防止永久阻塞
         last_error = None
         for attempt in range(3):
             try:
-                raw = chain.invoke({"input": input_str})
+                raw = chain.invoke({"input": input_str}, config={"timeout": 120})
                 text = self._strip_fences(raw)
                 result = _try_parse_json(text)
                 if result is not None:
@@ -129,9 +135,9 @@ class LLMClient:
                 last_error = f"LLM 调用失败 (attempt {attempt+1}): {e}"
                 print(f"[LLM] {last_error}")
 
-            # 指数退避：第1次重试等1秒，第2次重试等3秒
+            # 指数退避：第1次重试等1秒，第2次重试等5秒
             if attempt < 2:
-                wait_time = 1 if attempt == 0 else 3
+                wait_time = 1 if attempt == 0 else 5
                 print(f"[LLM] 等待 {wait_time} 秒后重试...")
                 time.sleep(wait_time)
 

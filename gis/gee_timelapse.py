@@ -72,13 +72,7 @@ def _month_days(year: int, month: int) -> int:
 # 2. GEE 端 LST 反演（单通道算法）
 # ============================================================
 
-def _mask_clouds_qa(image: ee.Image) -> ee.Image:
-    """Landsat Collection 2 QA_PIXEL 云掩膜"""
-    qa = image.select("QA_PIXEL")
-    cloud_bit = 1 << 3
-    shadow_bit = 1 << 4
-    mask = qa.bitwiseAnd(cloud_bit).eq(0).And(qa.bitwiseAnd(shadow_bit).eq(0))
-    return image.updateMask(mask)
+from ._gee_common import mask_clouds_qa as _mask_clouds_qa
 
 
 def _landsat89_l2_collection(region_geom, start_date: str, end_date: str, cloud_pct: float = 30):

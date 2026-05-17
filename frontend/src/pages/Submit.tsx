@@ -12,8 +12,16 @@ export default function Submit() {
       const task = await createTask({ input_text: text })
       toast.success('任务已提交')
       navigate(`/tasks/${task.id}`)
-    } catch {
-      toast.error('任务提交失败')
+    } catch (err: any) {
+      const status = err?.response?.status
+      const detail = err?.response?.data?.detail || ''
+      if (status === 429) {
+        toast.error('已有 2 个任务正在运行，请等待完成后重试')
+      } else if (status === 422) {
+        toast.error(`输入不合法：${detail || '请检查任务描述'}`)
+      } else {
+        toast.error(`任务提交失败：${detail || '请检查后端服务是否正常'}`)
+      }
     }
   }
 

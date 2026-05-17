@@ -36,6 +36,13 @@ def compare_views(
         with rasterio.open(tif_result) as src:
             data_result = src.read(1).astype("float32")
 
+        # 检查形状一致性
+        if data_orig.shape != data_result.shape:
+            return {
+                "success": False,
+                "message": f"两个栅格形状不一致: {data_orig.shape} vs {data_result.shape}，无法对比",
+            }
+
         if mode == "difference":
             # 差异图
             diff = data_result - data_orig

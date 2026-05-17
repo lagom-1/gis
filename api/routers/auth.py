@@ -7,13 +7,12 @@
 
 from __future__ import annotations
 
-import hashlib
-import secrets
 from datetime import datetime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from jose import JWTError, jwt
+from passlib.hash import bcrypt
 from sqlalchemy.orm import Session
 
 import config
@@ -32,18 +31,14 @@ router = APIRouter(prefix="/api/auth", tags=["认证"])
 # ── 工具函数 ──────────────────────────────────────────────
 
 def hash_password(password: str) -> str:
-    """生成密码哈希（使用 SHA-256 + 盐值）"""
-    salt = secrets.token_hex(16)
-    pwd_hash = hashlib.sha256(f"{salt}{password}".encode()).hexdigest()
-    return f"{salt}:{pwd_hash}"
+    """生成密码哈希（使用 bcrypt）"""
+    return bcrypt.hash(password)
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """验证密码"""
     try:
-        salt, stored_hash = hashed_password.split(":")
-        pwd_hash = hashlib.sha256(f"{salt}{plain_password}".encode()).hexdigest()
-        return pwd_hash == stored_hash
+        return bcrypt.verify(plain_password, hashed_password)
     except Exception:
         return False
 

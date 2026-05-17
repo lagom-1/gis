@@ -788,14 +788,14 @@ class GISAgent:
                 reason = region_fix["reason"]
 
             if history and history[-1]["tool"] == "set_map_style" and tool != "make_thematic_map":
-                tool = "make_thematic_map"
-                args = {}
-                reason = "自动触发：样式更新后必须重新出图"
+                # 不再静默覆盖 LLM 决策，而是在下方的 set_map_style 成功处理中自动触发出图
+                pass
 
             try:
                 result = self.registry.call(tool, args)
                 if "success" not in result:
-                    result["success"] = True
+                    print(f"[Agent] 警告：工具 {tool} 返回结果缺少 success 字段，假定失败")
+                    result["success"] = False
             except Exception as exc:
                 result = {
                     "success": False,
@@ -812,30 +812,22 @@ class GISAgent:
             history.append(record)
             last_result = result
 
-            # ── 【新增】GEE 未认证时自动调用 gee_init ──
+            # ── 【修复】GEE 未认证时自动调用 gee_init 并重试原工具 ──
             if not result.get("success") and result.get("requires") == "gee_init":
                 print("[Agent] GEE 未认证，自动执行 gee_init...")
                 try:
                     gee_result = self.registry.call("gee_init", {})
-                    gee_record = {
-                        "step": step,
-                        "tool": "gee_init",
-                        "args": {},
-                        "reason": "GEE 未认证，自动初始化",
-                        "result": gee_result,
-                    }
-                    history.append(gee_record)
-                    self.memory.append_event(
-                        step=step, tool="gee_init", args={},
-                        result=gee_result, reason="自动 GEE 初始化",
-                    )
                     if not gee_result.get("success"):
                         final_answer = (
                             f"GEE 认证失败：{gee_result.get('message', '')}。"
                             "请手动执行 gee_init（输入'初始化GEE'）完成 Google 账号授权。"
                         )
                         break
-                    # 认证成功，下一步会重新调用原工具
+                    # 认证成功，立即重试原工具
+                    print(f"[Agent] GEE 认证成功，重试原工具: {tool}")
+                    result = self.registry.call(tool, args)
+                    if "success" not in result:
+                        result["success"] = False
                 except Exception as gee_exc:
                     final_answer = f"GEE 初始化异常: {gee_exc}。请手动输入'初始化GEE'完成授权。"
                     break
@@ -844,7 +836,7 @@ class GISAgent:
                 try:
                     render_result = self.registry.call("make_thematic_map", {})
                     if "success" not in render_result:
-                        render_result["success"] = True
+                        render_result["success"] = False
                 except Exception as exc:
                     render_result = {"success": False, "message": str(exc)}
 
@@ -869,9 +861,12 @@ class GISAgent:
                 history.append(render_record)
                 last_result = render_result
 
-            if not result.get("success", False) and step >= max(3, self.max_steps - 2):
-                final_answer = result.get("message", "执行失败")
-                break
+            # 失败时允许重试，仅在靠近 max_steps 且连续失败时终止
+            if not result.get("success", False):
+                consecutive_failures = sum(1 for r in history[-3:] if not r.get("result", {}).get("success", True))
+                if step >= max(5, self.max_steps - 3) and consecutive_failures >= 2:
+                    final_answer = result.get("message", "执行失败")
+                    break
         else:
             if history and history[-1]["result"].get("success"):
                 last_msg = history[-1]["result"].get("message", "")

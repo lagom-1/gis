@@ -37,7 +37,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     yield
 
-    # 关闭时：清理资源（如有需要）
+    # 关闭时：清理线程池和资源
+    from api.routers.tasks import _task_executor
+    logger.info("正在关闭任务线程池...")
+    _task_executor.shutdown(wait=False)
     logger.info("应用关闭")
 
 
@@ -95,15 +98,9 @@ app.include_router(payments.router)
 app.include_router(downloads.router)
 
 
-# ── 静态文件服务（开发模式）──────────────────────────────────────
-
-from fastapi.staticfiles import StaticFiles
-from pathlib import Path
-
-# 挂载输出目录为静态文件
-outputs_dir = Path(__file__).parent.parent / "workspace" / "outputs"
-if outputs_dir.exists():
-    app.mount("/outputs", StaticFiles(directory=str(outputs_dir)), name="outputs")
+# 注意：/outputs/ 不再公开挂载为静态文件
+# 所有文件下载必须通过 /api/downloads/ 端点（带付费检查）
+# 预览图片通过 /api/downloads/{task_id}/preview/{filename} 端点
 
 
 # ── 健康检查 ──────────────────────────────────────────────
