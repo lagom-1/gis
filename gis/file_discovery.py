@@ -49,7 +49,7 @@ def find_local_files(
             continue
         # 跳过盘符根目录，太昂贵
         root_path = Path(root).resolve()
-        if str(root_path) in {r"C:\", r"D:\", r"E:\", r"G:\", "C:\\", "D:\\", "E:\\", "G:\\"}:
+        if str(root_path) in {"C:\\", "D:\\", "E:\\", "G:\\"}:
             continue
         root_depth = root.count(os.sep)
         for dirpath, dirnames, filenames in os.walk(root):
