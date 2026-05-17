@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { Send, Loader2, Image as ImageIcon, Film, BarChart3, ChevronLeft, ChevronRight, Trash2, FileImage, FileText, Download, Maximize2, Minimize2 } from 'lucide-react'
 import { useTaskStore } from '../stores/taskStore'
 import { useWorkspaceStore, type OutputFile } from '../stores/workspaceStore'
+import { tasksService } from '../services/tasks'
 import toast from 'react-hot-toast'
 
 // 已处理过的任务 ID 集合（模块级，跨挂载持久）
@@ -14,8 +15,8 @@ export default function Workspace() {
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const workspaceTaskIdRef = useRef<number | null>(null)
-  const { createTask, currentTask, fetchTask } = useTaskStore(
-    (s) => ({ createTask: s.createTask, currentTask: s.currentTask, fetchTask: s.fetchTask })
+  const { createTask, currentTask } = useTaskStore(
+    (s) => ({ createTask: s.createTask, currentTask: s.currentTask })
   )
   const {
     messages,
@@ -32,95 +33,10 @@ export default function Workspace() {
     setSidebarCollapsed,
   } = useWorkspaceStore()
 
-  // 自动滚动到底部
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
-
-  // 轮询任务状态（silent 模式，不触发页面闪烁）
-  useEffect(() => {
-    if (!currentTask) return
-    if (currentTask.id !== workspaceTaskIdRef.current) return
-    if (currentTask.status === 'completed' || currentTask.status === 'failed') return
-
-    const interval = setInterval(async () => {
-      await fetchTask(currentTask.id, true)
-    }, 5000)
-    return () => clearInterval(interval)
-  }, [currentTask?.id, currentTask?.status, fetchTask])
-
-  // 任务完成/失败时更新输出 + 显示 Agent 回复
-  useEffect(() => {
-    if (!currentTask) return
-    if (currentTask.id !== workspaceTaskIdRef.current) return
-    if (processedTaskIds.has(currentTask.id)) return
-
-    if (currentTask.status === 'completed') {
-      const files = (currentTask.output_files || []) as OutputFile[]
-
-      if (files.length > 0) {
-        setCurrentOutput(files)
-        const gifFile = files.find(f => f.name.endsWith('.gif'))
-        const mapFile = files.find(f => f.name.includes('_map.png'))
-        const lstFile = files.find(f => f.name.includes('_lst.png'))
-        setPreviewFile(gifFile || mapFile || lstFile || files[0])
-      }
-
-      const alreadyHasMessage = messages.some(m => m.role === 'assistant' && m.taskId === currentTask.id)
-      if (!alreadyHasMessage) {
-        const answer = currentTask.final_answer
-        if (answer && answer.trim()) {
-          addMessage({ role: 'assistant', content: answer, taskId: currentTask.id })
-        } else if (files.length > 0) {
-          addMessage({
-            role: 'assistant',
-            content: `任务完成。\n\n生成文件：\n${files.map(f => `  ${f.name} (${formatSize(f.size)})`).join('\n')}`,
-            taskId: currentTask.id,
-          })
-        }
-      }
-
-      processedTaskIds.add(currentTask.id)
-      setIsProcessing(false)
-    } else if (currentTask.status === 'failed') {
-      const alreadyHasMessage = messages.some(m => m.role === 'assistant' && m.taskId === currentTask.id)
-      if (!alreadyHasMessage) {
-        addMessage({ role: 'assistant', content: `❌ 任务执行失败：${currentTask.error_message || '未知错误'}`, taskId: currentTask.id })
-      }
-      processedTaskIds.add(currentTask.id)
-      setIsProcessing(false)
-    }
-  }, [currentTask?.status, currentTask?.id])
-
-  const handleSubmit = useCallback(async () => {
-    if (!input.trim() || isProcessing) return
-
-    const userMessage = input
-    setInput('')
-    setIsProcessing(true)
-
-    addMessage({ role: 'user', content: userMessage })
-
-    try {
-      const task = await createTask({ input_text: userMessage })
-      workspaceTaskIdRef.current = task.id
-      // 如果任务同步返回了结果（极快完成或失败），立即拉取最新状态
-      if (task.status === 'completed' || task.status === 'failed') {
-        await fetchTask(task.id)
-      }
-    } catch {
-      toast.error('任务提交失败')
-      addMessage({ role: 'assistant', content: '❌ 任务提交失败，请检查后端服务是否正常。' })
-      setIsProcessing(false)
-    }
-  }, [input, isProcessing, addMessage, createTask, fetchTask])
-
-  const handleClearChat = () => {
-    clearMessages()
-    setCurrentOutput([])
-    setPreviewFile(null)
-    processedTaskIds.clear()
-    workspaceTaskIdRef.current = null
+  const formatSize = (bytes: number) => {
+    if (bytes < 1024) return bytes + ' B'
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
   }
 
   const getFileUrl = (file: OutputFile) => `/outputs/${file.relative_path || file.name}`
@@ -135,10 +51,81 @@ export default function Workspace() {
   const isTifFile = (name: string) => /\.(tif|tiff)$/i.test(name)
   const isHtmlFile = (name: string) => name.endsWith('.html')
 
-  const formatSize = (bytes: number) => {
-    if (bytes < 1024) return bytes + ' B'
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
-    return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
+  // 自动滚动到底部
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages])
+
+  const handleSubmit = useCallback(async () => {
+    if (!input.trim() || isProcessing) return
+
+    const userMessage = input
+    setInput('')
+    setIsProcessing(true)
+
+    addMessage({ role: 'user', content: userMessage })
+
+    try {
+      let task = await createTask({ input_text: userMessage })
+      workspaceTaskIdRef.current = task.id
+
+      // 主动轮询任务状态直到完成或失败（不依赖 useEffect 的时机）
+      const maxWait = 300000 // 最长等 5 分钟
+      const pollInterval = 2000 // 每 2 秒查一次
+      const startTime = Date.now()
+
+      while (task.status !== 'completed' && task.status !== 'failed' && task.status !== 'cancelled') {
+        if (Date.now() - startTime > maxWait) {
+          addMessage({ role: 'assistant', content: '⏰ 任务执行超时，请稍后在任务列表查看结果。', taskId: task.id })
+          setIsProcessing(false)
+          return
+        }
+        await new Promise(resolve => setTimeout(resolve, pollInterval))
+        task = await tasksService.getTask(task.id)
+      }
+
+      // 任务完成：更新 store 并显示结果
+      useTaskStore.setState({ currentTask: task })
+
+      if (task.status === 'completed') {
+        const files = (task.output_files || []) as OutputFile[]
+        if (files.length > 0) {
+          setCurrentOutput(files)
+          const gifFile = files.find((f: OutputFile) => f.name.endsWith('.gif'))
+          const mapFile = files.find((f: OutputFile) => f.name.includes('_map.png'))
+          const lstFile = files.find((f: OutputFile) => f.name.includes('_lst.png'))
+          setPreviewFile(gifFile || mapFile || lstFile || files[0])
+        }
+
+        const answer = task.final_answer
+        if (answer && answer.trim()) {
+          addMessage({ role: 'assistant', content: answer, taskId: task.id })
+        } else if (files.length > 0) {
+          addMessage({
+            role: 'assistant',
+            content: `任务完成。\n\n生成文件：\n${files.map((f: OutputFile) => `  ${f.name} (${formatSize(f.size)})`).join('\n')}`,
+            taskId: task.id,
+          })
+        }
+        processedTaskIds.add(task.id)
+      } else if (task.status === 'failed') {
+        addMessage({ role: 'assistant', content: `❌ 任务执行失败：${task.error_message || '未知错误'}`, taskId: task.id })
+        processedTaskIds.add(task.id)
+      }
+    } catch {
+      toast.error('任务提交失败')
+      addMessage({ role: 'assistant', content: '❌ 任务提交失败，请检查后端服务是否正常。' })
+    } finally {
+      setIsProcessing(false)
+    }
+  }, [input, isProcessing, addMessage, createTask, setCurrentOutput, setPreviewFile])
+
+  const handleClearChat = () => {
+    clearMessages()
+    setCurrentOutput([])
+    setPreviewFile(null)
+    processedTaskIds.clear()
+    workspaceTaskIdRef.current = null
   }
 
   const handleFileClick = (file: OutputFile) => {
@@ -225,9 +212,11 @@ export default function Workspace() {
               ))}
               {isProcessing && (
                 <div className="flex justify-start">
-                  <div className="bg-gray-100 rounded-2xl rounded-bl-md px-4 py-2.5 flex items-center space-x-2">
-                    <Loader2 className="h-4 w-4 animate-spin text-primary-600" />
-                    <span className="text-sm text-gray-600">Agent 正在执行中...</span>
+                  <div className="bg-gray-100 rounded-2xl rounded-bl-md px-4 py-2.5">
+                    <div className="flex items-center space-x-2">
+                      <Loader2 className="h-4 w-4 animate-spin text-primary-600" />
+                      <span className="text-sm text-gray-600">Agent 正在执行中... {currentTask?.status && `(${currentTask.status})`}</span>
+                    </div>
                   </div>
                 </div>
               )}
