@@ -30,6 +30,7 @@ workspace/outputs/
 workspace/*.db
 workspace/memory.json
 workspace/preferences.json
+results/
 
 # Node
 node_modules/
