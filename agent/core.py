@@ -699,7 +699,7 @@ class GISAgent:
 
     # ── 主执行流程 ───────────────────────────────────
 
-    def run(self, user_input: str) -> Dict[str, Any]:
+    def run(self, user_input: str, progress_callback=None) -> Dict[str, Any]:
         self.memory.start_new_task(user_input)
         self.runtime.reset_for_new_task()
         history: List[Dict[str, Any]] = []
@@ -812,6 +812,9 @@ class GISAgent:
             history.append(record)
             last_result = result
 
+            if progress_callback:
+                progress_callback(step=step, tool=tool)
+
             # ── 【修复】GEE 未认证时自动调用 gee_init 并重试原工具 ──
             if not result.get("success") and result.get("requires") == "gee_init":
                 print("[Agent] GEE 未认证，自动执行 gee_init...")
@@ -860,6 +863,9 @@ class GISAgent:
                 }
                 history.append(render_record)
                 last_result = render_result
+
+                if progress_callback:
+                    progress_callback(step=step, tool="make_thematic_map")
 
             # 失败时允许重试，仅在靠近 max_steps 且连续失败时终止
             if not result.get("success", False):

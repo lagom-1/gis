@@ -92,6 +92,8 @@ class Task(Base):
     final_answer = Column(Text, nullable=True, comment="Agent 的最终回复文本")
     error_message = Column(Text, nullable=True, comment="失败时的错误信息")
     run_log_path = Column(String(512), nullable=True, comment="运行日志文件路径")
+    current_step = Column(Integer, nullable=True, default=0, comment="当前执行步骤编号")
+    step_description = Column(Text, nullable=True, comment="当前步骤描述（工具名+参数摘要）")
 
     # 关系
     user = relationship("User", back_populates="tasks")
@@ -206,6 +208,8 @@ class TaskResponse(BaseModel):
     final_answer: Optional[str] = None
     error_message: Optional[str] = None
     run_log_path: Optional[str] = None
+    current_step: Optional[int] = None
+    step_description: Optional[str] = None
 
     model_config = {"from_attributes": True}
 

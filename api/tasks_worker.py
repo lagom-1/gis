@@ -63,6 +63,10 @@ def _update_task_status(task_id: int, status: str, **kwargs) -> None:
             task.run_log_path = kwargs["run_log_path"]
         if "celery_task_id" in kwargs:
             task.celery_task_id = kwargs["celery_task_id"]
+        if "current_step" in kwargs:
+            task.current_step = kwargs["current_step"]
+        if "step_description" in kwargs:
+            task.step_description = kwargs["step_description"]
 
         db.commit()
         logger.info(f"任务 {task_id} 状态更新为 {status}")
@@ -174,7 +178,11 @@ def _execute_gis_task(task_id: int, input_text: str, celery_task_id: str = None)
         from agent.core import GISAgent
 
         agent = GISAgent(max_steps=25)
-        result = agent.run(input_text)
+
+        def _on_progress(step: int, tool: str):
+            _update_task_status(task_id, "running", current_step=step, step_description=tool)
+
+        result = agent.run(input_text, progress_callback=_on_progress)
 
         # 收集任务输出文件
         output_files = _collect_output_files(task_id, start_timestamp=task_start_timestamp)

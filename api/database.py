@@ -60,6 +60,8 @@ def _auto_migrate_columns() -> None:
             # 需要添加的列: (列名, SQL 类型)
             missing_cols = [
                 ("final_answer", "TEXT"),
+                ("current_step", "INTEGER DEFAULT 0"),
+                ("step_description", "TEXT"),
             ]
             for col_name, col_type in missing_cols:
                 if col_name not in existing_cols:

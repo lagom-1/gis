@@ -18,6 +18,8 @@ export interface Task {
   final_answer: string | null
   error_message: string | null
   run_log_path: string | null
+  current_step: number | null
+  step_description: string | null
 }
 
 export interface Order {

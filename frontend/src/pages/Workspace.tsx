@@ -33,12 +33,12 @@ export default function Workspace() {
   const [input, setInput] = useState('')
   const [fullscreenPreview, setFullscreenPreview] = useState(false)
   const [executionStep, setExecutionStep] = useState(0)
+  const [executionTool, setExecutionTool] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const abortRef = useRef<AbortController | null>(null)
   const mountedRef = useRef(true)
-  const stepTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const resumeAttemptedRef = useRef(false)
   const { createTask, currentTask } = useTaskStore(
     (s) => ({ createTask: s.createTask, currentTask: s.currentTask })
@@ -98,8 +98,6 @@ export default function Workspace() {
     return () => {
       mountedRef.current = false
       // 不再 abort 轮询 — 让它在后台继续运行
-      // 进度模拟器也保留
-      if (stepTimerRef.current) clearInterval(stepTimerRef.current)
     }
   }, [])
 
@@ -117,7 +115,7 @@ export default function Workspace() {
       if (task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled') {
         // 任务已结束，清理状态
         setProcessing(false, null)
-        stopStepSimulation()
+        setExecutionStep(0)
         if (task.status === 'completed') {
           useTaskStore.setState({ currentTask: task })
           const files = (task.output_files || []) as OutputFile[]
@@ -136,8 +134,9 @@ export default function Workspace() {
         }
         return
       }
-      // 任务仍在执行，恢复进度动画和轮询
-      startStepSimulation()
+      // 任务仍在执行，恢复进度和轮询
+      setExecutionStep(task.current_step || 1)
+      setExecutionTool(task.step_description || '')
       const maxWait = 300000
       const pollInterval = 2000
       const startTime = Date.now()
@@ -145,7 +144,7 @@ export default function Workspace() {
         if (Date.now() - startTime > maxWait) {
           addMessage({ role: 'assistant', content: '⏰ 任务执行超时，请稍后在任务列表查看结果。', taskId: task.id })
           setProcessing(false, null)
-          stopStepSimulation()
+          setExecutionStep(0)
           return
         }
         try {
@@ -158,8 +157,10 @@ export default function Workspace() {
           })
         } catch { return }
         task = await tasksService.getTask(activeTaskId)
+        setExecutionStep(task.current_step || 0)
+        setExecutionTool(task.step_description || '')
       }
-      stopStepSimulation()
+      setExecutionStep(0)
       setProcessing(false, null)
       if (task.status === 'completed') {
         useTaskStore.setState({ currentTask: task })
@@ -180,20 +181,6 @@ export default function Workspace() {
     resumePolling()
   }, [activeTaskId, isProcessing])
 
-  // 模拟执行进度（后端暂不暴露中间步骤，用时间估算）
-  const startStepSimulation = () => {
-    setExecutionStep(0)
-    stepTimerRef.current = setInterval(() => {
-      setExecutionStep(s => s + 1)
-    }, 3000)
-  }
-  const stopStepSimulation = () => {
-    if (stepTimerRef.current) {
-      clearInterval(stepTimerRef.current)
-      stepTimerRef.current = null
-    }
-  }
-
   const handleSubmit = useCallback(async () => {
     if (!input.trim() || isProcessing) return
 
@@ -201,7 +188,8 @@ export default function Workspace() {
     setInput('')
     setProcessing(true)
     resumeAttemptedRef.current = false
-    startStepSimulation()
+    setExecutionStep(1)
+    setExecutionTool('')
 
     addMessage({ role: 'user', content: userMessage })
 
@@ -221,7 +209,7 @@ export default function Workspace() {
         if (Date.now() - startTime > maxWait) {
           addMessage({ role: 'assistant', content: '⏰ 任务执行超时，请稍后在任务列表查看结果。', taskId: task.id })
           setProcessing(false, null)
-          stopStepSimulation()
+          setExecutionStep(0)
           return
         }
         try {
@@ -237,10 +225,13 @@ export default function Workspace() {
         }
         if (abortController.signal.aborted) return
         task = await tasksService.getTask(task.id)
+        setExecutionStep(task.current_step || 0)
+        setExecutionTool(task.step_description || '')
       }
 
       if (abortController.signal.aborted || !mountedRef.current) return
-      stopStepSimulation()
+      setExecutionStep(0)
+      setExecutionTool('')
       setProcessing(false, null)
 
       useTaskStore.setState({ currentTask: task })
@@ -272,7 +263,7 @@ export default function Workspace() {
       addMessage({ role: 'assistant', content: '**任务提交失败**，请检查后端服务是否正常。' })
     } finally {
       setProcessing(false, null)
-      stopStepSimulation()
+      setExecutionStep(0)
     }
   }, [input, isProcessing, addMessage, createTask, setCurrentOutput, setPreviewFile, setProcessing])
 
@@ -429,27 +420,21 @@ export default function Workspace() {
                       <span className="text-sm text-gray-600 font-medium">Agent 执行中</span>
                     </div>
                     {executionStep > 0 && (
-                      <div className="mt-2 flex items-center space-x-1.5 text-xs text-gray-500">
-                        <div className="flex space-x-1">
-                          {[0, 1, 2].map((i) => (
-                            <div
-                              key={i}
-                              className={`h-1.5 w-1.5 rounded-full transition-colors duration-500 ${
-                                i <= executionStep % 3 ? 'bg-primary-500' : 'bg-gray-300'
-                              }`}
-                            />
-                          ))}
+                      <div className="mt-2 space-y-1">
+                        <div className="flex items-center space-x-1.5 text-xs text-gray-500">
+                          <span className="font-medium text-primary-600">步骤 {executionStep}</span>
+                          {executionTool && (
+                            <span className="text-gray-400">· {executionTool}</span>
+                          )}
                         </div>
-                        <span>步骤 {executionStep}</span>
+                        <div className="w-full bg-gray-200 rounded-full h-1 overflow-hidden">
+                          <div
+                            className="bg-primary-500 h-full rounded-full transition-all duration-700 ease-out"
+                            style={{ width: `${Math.min((executionStep / 25) * 100, 90)}%` }}
+                          />
+                        </div>
                       </div>
                     )}
-                    {/* 进度条 */}
-                    <div className="mt-2 w-full bg-gray-200 rounded-full h-1 overflow-hidden">
-                      <div
-                        className="bg-primary-500 h-full rounded-full transition-all duration-1000 ease-out"
-                        style={{ width: `${Math.min((executionStep / 15) * 100, 90)}%` }}
-                      />
-                    </div>
                   </div>
                 </div>
               )}
