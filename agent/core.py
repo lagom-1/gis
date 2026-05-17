@@ -139,20 +139,20 @@ def _has_yearly_lst_intent(text: str) -> bool:
 
 
 def _has_multi_year_lst_intent(text: str) -> bool:
-    """检测用户是否有跨多年单月 LST 意图（如"2020-2025年每年8月"）"""
+    """检测用户是否有跨多年单月 LST 意图（如"2020-2025年每年8月"、"2022-2025年3月"）"""
     t = text.lower()
     has_lst_kw = any(k in t for k in ["地表温度", "lst", "温度反演", "热红外", "地温"])
-    # 匹配 "YYYY-YYYY年每年M月" 或 "YYYY到YYYY年每年M月"
-    has_multi_year = bool(re.search(r"\d{4}\s*[-到~]\s*\d{4}\s*年.*每年\s*\d{1,2}\s*月", t))
+    # 匹配 "YYYY-YYYY年每年M月" 或 "YYYY到YYYY年每年M月" 或 "YYYY-YYYY年M月"
+    has_multi_year = bool(re.search(r"\d{4}\s*[-到~]\s*\d{4}\s*年.*?\d{1,2}\s*月", t))
     # 匹配 "连续N年M月"
     has_consecutive = bool(re.search(r"连续\s*\d+\s*年.*\d{1,2}\s*月", t))
     return has_lst_kw and (has_multi_year or has_consecutive)
 
 
 def _extract_multi_year_range(text: str) -> tuple[int, int, int]:
-    """从文本中提取跨多年范围和月份，如 '2020-2025年每年8月' → (2020, 2025, 8)"""
-    # "YYYY-YYYY年每年M月"
-    m = re.search(r"(\d{4})\s*[-到~]\s*(\d{4})\s*年.*每年\s*(\d{1,2})\s*月", text)
+    """从文本中提取跨多年范围和月份，如 '2020-2025年每年8月' / '2022-2025年3月' → (2020, 2025, 8)"""
+    # "YYYY-YYYY年每年M月" 或 "YYYY-YYYY年M月"
+    m = re.search(r"(\d{4})\s*[-到~]\s*(\d{4})\s*年.*?(\d{1,2})\s*月", text)
     if m:
         return int(m.group(1)), int(m.group(2)), int(m.group(3))
     # "连续N年M月" → 从当前年往前推
