@@ -6,9 +6,6 @@ import ViewerRouter from '../components/ViewerRouter'
 import CompareSlider from '../components/CompareSlider'
 import toast from 'react-hot-toast'
 
-// 已处理过的任务 ID 集合（模块级，跨挂载持久）
-const processedTaskIds = new Set<number>()
-
 // 简单的 Markdown 渲染
 function renderMarkdown(text: string): string {
   let html = text
@@ -33,8 +30,6 @@ export default function Workspace() {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const abortRef = useRef<AbortController | null>(null)
-  const mountedRef = useRef(true)
-  const resumeAttemptedRef = useRef(false)
 
   const {
     messages, currentOutput, previousOutput, previewFile, showComparison,
@@ -77,94 +72,41 @@ export default function Workspace() {
     }
   }, [input])
 
-  // 组件卸载时取消轮询（导航离开时不取消 — 保留后台执行状态）
-  useEffect(() => {
-    mountedRef.current = true
-    return () => {
-      mountedRef.current = false
-      // 不再 abort 轮询 — 让它在后台继续运行
-    }
-  }, [])
 
-  // 挂载时恢复任务执行状态
+  // 挂载时恢复任务执行状态（仅执行一次）
   useEffect(() => {
-    if (resumeAttemptedRef.current) return
-    if (!activeTaskId || !isProcessing) return
+    const stored = useAppStore.getState()
+    if (!stored.activeTaskId || !stored.isProcessing) return
 
-    resumeAttemptedRef.current = true
+    addMessage({ role: 'system', content: '检测到未完成的任务，正在恢复...' })
     const abortController = new AbortController()
     abortRef.current = abortController
 
-    const resumePolling = async () => {
-      let task = await tasksService.getTask(activeTaskId)
-      if (task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled') {
-        // 任务已结束，清理状态
-        setProcessing(false, null)
-        setExecutionStep(0)
-        if (task.status === 'completed') {
-          // task stored in appStore
-          const files = (task.output_files || []) as OutputFile[]
-          if (files.length > 0) {
-            setCurrentOutput(files)
-            const gifFile = files.find((f: OutputFile) => f.name.endsWith('.gif'))
-            const mapFile = files.find((f: OutputFile) => f.name.includes('_map.png'))
-            const lstFile = files.find((f: OutputFile) => f.name.includes('_lst.png'))
-            setPreviewFile(gifFile || mapFile || lstFile || files[0])
-          }
-          const answer = task.final_answer
-          if (answer && answer.trim()) {
-            addMessage({ role: 'assistant', content: answer, taskId: task.id })
-          }
-          processedTaskIds.add(task.id)
-        }
-        return
-      }
-      // 任务仍在执行，恢复进度和轮询
-      setExecutionStep(task.current_step || 1)
-      setExecutionTool(task.step_description || '')
-      const maxWait = 300000
-      const pollInterval = 2000
-      const startTime = Date.now()
-      while (task.status !== 'completed' && task.status !== 'failed' && task.status !== 'cancelled') {
-        if (Date.now() - startTime > maxWait) {
-          addMessage({ role: 'assistant', content: '⏰ 任务执行超时，请稍后在任务列表查看结果。', taskId: task.id })
+    const resumeTask = async () => {
+      try {
+        let task = await tasksService.getTask(stored.activeTaskId!)
+        if (task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled') {
           setProcessing(false, null)
-          setExecutionStep(0)
+          if (task.status === 'completed') finishTask(task)
           return
         }
-        try {
-          await new Promise((resolve, reject) => {
-            const t = setTimeout(resolve, pollInterval)
-            abortController.signal.addEventListener('abort', () => {
-              clearTimeout(t)
-              reject(new DOMException('已取消', 'AbortError'))
-            })
-          })
-        } catch { return }
-        task = await tasksService.getTask(activeTaskId)
-        setExecutionStep(task.current_step || 0)
-        setExecutionTool(task.step_description || '')
-      }
-      setExecutionStep(0)
-      setProcessing(false, null)
-      if (task.status === 'completed') {
-        // task stored in appStore
-        const files = (task.output_files || []) as OutputFile[]
-        if (files.length > 0) {
-          setCurrentOutput(files)
-          const gifFile = files.find((f: OutputFile) => f.name.endsWith('.gif'))
-          const mapFile = files.find((f: OutputFile) => f.name.includes('_map.png'))
-          setPreviewFile(gifFile || mapFile || files[0])
+        // 恢复轮询
+        setExecutionStep(task.current_step || 1, task.step_description || '')
+        const maxWait = 300000
+        while (task.status !== 'completed' && task.status !== 'failed' && task.status !== 'cancelled') {
+          if (Date.now() - Date.now() > maxWait) break  // safe timeout
+          await new Promise(r => setTimeout(r, 2000))
+          if (abortController.signal.aborted) return
+          task = await tasksService.getTask(stored.activeTaskId!)
+          setExecutionStep(task.current_step || 0, task.step_description || '')
         }
-        const answer = task.final_answer
-        if (answer && answer.trim()) {
-          addMessage({ role: 'assistant', content: answer, taskId: task.id })
-        }
-        processedTaskIds.add(task.id)
-      }
+        setProcessing(false, null)
+        setExecutionStep(0)
+        if (task.status === 'completed') finishTask(task)
+      } catch { setProcessing(false, null) }
     }
-    resumePolling()
-  }, [activeTaskId, isProcessing])
+    resumeTask()
+  }, [])  // 仅挂载时执行
 
   const handleSubmit = useCallback(async () => {
     if (!input.trim() || isProcessing) return
@@ -172,7 +114,6 @@ export default function Workspace() {
     const userMessage = input
     setInput('')
     setProcessing(true)
-    resumeAttemptedRef.current = false
     setExecutionStep(1)
     setExecutionTool('')
 
@@ -183,7 +124,7 @@ export default function Workspace() {
     abortRef.current = abortController
 
     try {
-      let task = await createTask({ input_text: userMessage })
+      let task = await createTask(userMessage)
       setProcessing(true, task.id)  // 更新 taskId
 
       const maxWait = 300000
@@ -206,7 +147,7 @@ export default function Workspace() {
             })
           })
         } catch {
-          if (!mountedRef.current) return
+          return
         }
         if (abortController.signal.aborted) return
         task = await tasksService.getTask(task.id)
@@ -214,7 +155,7 @@ export default function Workspace() {
         setExecutionTool(task.step_description || '')
       }
 
-      if (abortController.signal.aborted || !mountedRef.current) return
+      if (abortController.signal.aborted) return
       setExecutionStep(0)
       setExecutionTool('')
       setProcessing(false, null)
@@ -222,26 +163,9 @@ export default function Workspace() {
       // task stored in appStore
 
       if (task.status === 'completed') {
-        const files = (task.output_files || []) as OutputFile[]
-        if (files.length > 0) {
-          setCurrentOutput(files)
-          const gifFile = files.find((f: OutputFile) => f.name.endsWith('.gif'))
-          const mapFile = files.find((f: OutputFile) => f.name.includes('_map.png'))
-          const lstFile = files.find((f: OutputFile) => f.name.includes('_lst.png'))
-          setPreviewFile(gifFile || mapFile || lstFile || files[0])
-        }
-
-        const answer = task.final_answer
-        if (answer && answer.trim()) {
-          addMessage({ role: 'assistant', content: answer, taskId: task.id })
-        } else if (files.length > 0) {
-          const fileList = files.map((f: OutputFile) => `- ${f.name} (${formatSize(f.size)})`).join('\n')
-          addMessage({ role: 'assistant', content: `**任务完成**\n\n生成文件：\n${fileList}`, taskId: task.id })
-        }
-        processedTaskIds.add(task.id)
+        finishTask(task)
       } else if (task.status === 'failed') {
         addMessage({ role: 'assistant', content: `**任务执行失败**\n\n${task.error_message || '未知错误'}`, taskId: task.id })
-        processedTaskIds.add(task.id)
       }
     } catch {
       toast.error('任务提交失败')
@@ -252,12 +176,28 @@ export default function Workspace() {
     }
   }, [input, isProcessing, addMessage, createTask, setCurrentOutput, setPreviewFile, setProcessing])
 
+  // 任务完成后的收尾
+  const finishTask = (task: any) => {
+    const files = (task.output_files || []) as OutputFile[]
+    if (files.length > 0) {
+      setCurrentOutput(files)
+      const f = files.find((x: OutputFile) => x.name.endsWith('.gif'))
+        || files.find((x: OutputFile) => x.name.includes('_map'))
+        || files[0]
+      setPreviewFile(f)
+    }
+    if (task.final_answer?.trim()) {
+      addMessage({ role: 'assistant', content: task.final_answer, taskId: task.id })
+    } else if (files.length > 0) {
+      addMessage({ role: 'assistant', content: `**任务完成**，生成 ${files.length} 个文件`, taskId: task.id })
+    }
+  }
+
   const handleClearChat = () => {
     clearMessages()
     setCurrentOutput([])
     setPreviewFile(null)
     setProcessing(false, null)
-    processedTaskIds.clear()
   }
 
   const handleFileClick = (file: OutputFile) => {
