@@ -1,7 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { Send, Loader2, Image as ImageIcon, Film, BarChart3, ChevronLeft, ChevronRight, Trash2, FileImage, FileText, Download, Maximize2, Minimize2, Cpu } from 'lucide-react'
-import { useTaskStore } from '../stores/taskStore'
-import { useWorkspaceStore, type OutputFile } from '../stores/workspaceStore'
+import { Send, Loader2, Image as ImageIcon, Film, BarChart3, ChevronLeft, ChevronRight, Trash2, FileImage, FileText, Download, Maximize2, Minimize2, Cpu, Clock } from 'lucide-react'
+import { useAppStore, type OutputFile } from '../stores/appStore'
 import { tasksService } from '../services/tasks'
 import ViewerRouter from '../components/ViewerRouter'
 import CompareSlider from '../components/CompareSlider'
@@ -32,34 +31,21 @@ function renderMarkdown(text: string): string {
 export default function Workspace() {
   const [input, setInput] = useState('')
   const [fullscreenPreview, setFullscreenPreview] = useState(false)
-  const [executionStep, setExecutionStep] = useState(0)
-  const [executionTool, setExecutionTool] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const abortRef = useRef<AbortController | null>(null)
   const mountedRef = useRef(true)
   const resumeAttemptedRef = useRef(false)
-  const { createTask, currentTask } = useTaskStore(
-    (s) => ({ createTask: s.createTask, currentTask: s.currentTask })
-  )
+
   const {
-    messages,
-    currentOutput,
-    previousOutput,
-    previewFile,
-    showComparison,
-    sidebarCollapsed,
-    isProcessing,
-    activeTaskId,
-    addMessage,
-    clearMessages,
-    setCurrentOutput,
-    setPreviewFile,
-    setShowComparison,
-    setSidebarCollapsed,
-    setProcessing,
-  } = useWorkspaceStore()
+    messages, currentOutput, previousOutput, previewFile, showComparison,
+    sidebarCollapsed, isProcessing, activeTaskId, executionStep, executionTool,
+    recentTasks, activeTab, fullscreenPreview,
+    addMessage, clearMessages, setCurrentOutput, setPreviewFile,
+    setShowComparison, setSidebarCollapsed, setProcessing,
+    setExecutionStep, setFullscreenPreview, setActiveTab,
+    createTask, fetchRecentTasks,
+  } = useAppStore()
 
   const formatSize = (bytes: number) => {
     if (bytes < 1024) return bytes + ' B'
@@ -67,9 +53,9 @@ export default function Workspace() {
     return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
   }
 
-  const getFileUrl = (file: OutputFile) => `/api/downloads/${currentTask?.id}/${encodeURIComponent(file.name)}`
+  const getFileUrl = (file: OutputFile) => `/api/downloads/${activeTaskId}/${encodeURIComponent(file.name)}`
   const getPreviewUrl = (file: OutputFile) => {
-    if (isTifFile(file.name) && currentTask?.id) {
+    if (isTifFile(file.name) && activeTaskId) {
       return `/api/downloads/${currentTask.id}/preview/${encodeURIComponent(file.name)}`
     }
     return getFileUrl(file)
@@ -117,7 +103,7 @@ export default function Workspace() {
         setProcessing(false, null)
         setExecutionStep(0)
         if (task.status === 'completed') {
-          useTaskStore.setState({ currentTask: task })
+          // task stored in appStore
           const files = (task.output_files || []) as OutputFile[]
           if (files.length > 0) {
             setCurrentOutput(files)
@@ -163,7 +149,7 @@ export default function Workspace() {
       setExecutionStep(0)
       setProcessing(false, null)
       if (task.status === 'completed') {
-        useTaskStore.setState({ currentTask: task })
+        // task stored in appStore
         const files = (task.output_files || []) as OutputFile[]
         if (files.length > 0) {
           setCurrentOutput(files)
@@ -234,7 +220,7 @@ export default function Workspace() {
       setExecutionTool('')
       setProcessing(false, null)
 
-      useTaskStore.setState({ currentTask: task })
+      // task stored in appStore
 
       if (task.status === 'completed') {
         const files = (task.output_files || []) as OutputFile[]
@@ -371,18 +357,26 @@ export default function Workspace() {
 
         {!sidebarCollapsed && (
           <>
-            <div className="px-4 py-3 border-b flex items-center justify-between">
-              <div>
-                <h3 className="font-semibold text-gray-800">GIS 智能助手</h3>
-                <p className="text-[10px] text-gray-400 flex items-center gap-1">
-                  <Cpu className="h-2.5 w-2.5" />AI 驱动 · 遥感分析
-                </p>
+            <div className="px-4 py-3 border-b">
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="font-semibold text-gray-800">GIS 助手</h3>
+                <button onClick={handleClearChat} className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-md transition-colors" title="清空对话">
+                  <Trash2 className="h-4 w-4" />
+                </button>
               </div>
-              <button onClick={handleClearChat} className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-md transition-colors" title="清空对话">
-                <Trash2 className="h-4 w-4" />
-              </button>
+              <div className="flex space-x-1 bg-gray-100 rounded-lg p-0.5">
+                <button
+                  onClick={() => setActiveTab('chat')}
+                  className={`flex-1 text-xs py-1.5 rounded-md font-medium transition-colors ${activeTab === 'chat' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                >对话</button>
+                <button
+                  onClick={() => { setActiveTab('history'); fetchRecentTasks() }}
+                  className={`flex-1 text-xs py-1.5 rounded-md font-medium transition-colors ${activeTab === 'history' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                >历史</button>
+              </div>
             </div>
 
+            {activeTab === 'chat' && (
             <div className="flex-1 overflow-y-auto p-4 space-y-4">
               {messages.map((msg) => (
                 <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
@@ -447,12 +441,8 @@ export default function Workspace() {
                 <p className="text-xs text-gray-400 mb-2">试试这些示例：</p>
                 <div className="flex flex-wrap gap-1.5">
                   {examples.map((ex, i) => (
-                    <button
-                      key={i}
-                      onClick={() => { setInput(ex); textareaRef.current?.focus() }}
-                      className="text-xs px-2.5 py-1.5 bg-gray-50 hover:bg-gray-100 text-gray-600 rounded-full border transition-colors truncate max-w-[180px]"
-                      title={ex}
-                    >
+                    <button key={i} onClick={() => { setInput(ex); textareaRef.current?.focus() }}
+                      className="text-xs px-2.5 py-1.5 bg-gray-50 hover:bg-gray-100 text-gray-600 rounded-full border transition-colors truncate max-w-[180px]" title={ex}>
                       {ex.length > 18 ? ex.slice(0, 18) + '...' : ex}
                     </button>
                   ))}
@@ -463,30 +453,54 @@ export default function Workspace() {
             {/* 输入区域 */}
             <div className="p-3 border-t">
               <div className="flex items-end space-x-2">
-                <textarea
-                  ref={textareaRef}
-                  value={input}
+                <textarea ref={textareaRef} value={input}
                   onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !e.shiftKey) {
-                      e.preventDefault()
-                      handleSubmit()
-                    }
-                  }}
+                  onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSubmit() } }}
                   placeholder="输入 GIS 需求... (Enter 发送，Shift+Enter 换行)"
                   className="flex-1 px-3 py-2 border rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent text-sm resize-none"
-                  rows={1}
-                  disabled={isProcessing}
-                />
-                <button
-                  onClick={handleSubmit}
-                  disabled={isProcessing || !input.trim()}
-                  className="px-4 py-2.5 bg-primary-600 text-white rounded-xl hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
-                >
+                  rows={1} disabled={isProcessing} />
+                <button onClick={handleSubmit} disabled={isProcessing || !input.trim()}
+                  className="px-4 py-2.5 bg-primary-600 text-white rounded-xl hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0">
                   {isProcessing ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
                 </button>
               </div>
             </div>
+            )}
+
+            {/* 历史任务面板 */}
+            {activeTab === 'history' && (
+            <div className="flex-1 overflow-y-auto p-3 space-y-2">
+              {recentTasks.length === 0 ? (
+                <div className="text-center py-8 text-gray-400">
+                  <Clock className="h-10 w-10 mx-auto mb-2 opacity-30" />
+                  <p className="text-sm">暂无历史任务</p>
+                </div>
+              ) : recentTasks.map(task => (
+                <button key={task.id}
+                  onClick={() => {
+                    setActiveTab('chat')
+                    if (task.status === 'completed' && task.output_files) {
+                      const files = task.output_files as OutputFile[]
+                      setCurrentOutput(files)
+                      const img = (Array.isArray(files) ? files : []).find((f: OutputFile) =>
+                        f.name.endsWith('.png') || f.name.endsWith('.gif'))
+                      if (img) setPreviewFile(img)
+                    }
+                  }}
+                  className="w-full text-left p-3 bg-gray-50 hover:bg-gray-100 rounded-lg border transition-colors">
+                  <p className="text-xs text-gray-800 line-clamp-2 font-medium">{task.input_text}</p>
+                  <div className="flex items-center justify-between mt-1.5">
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${
+                      task.status === 'completed' ? 'bg-green-100 text-green-700' :
+                      task.status === 'running' ? 'bg-blue-100 text-blue-700' :
+                      task.status === 'failed' ? 'bg-red-100 text-red-700' : 'bg-gray-100 text-gray-600'
+                    }`}>{task.status}</span>
+                    <span className="text-[10px] text-gray-400">{new Date(task.created_at).toLocaleDateString()}</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+            )}
           </>
         )}
       </div>
