@@ -18,9 +18,8 @@ from datetime import date, timedelta
 from typing import Any, Dict, List, Optional
 
 from agent.memory import MemoryStore
-from agent.prompts import DECISION_SYSTEM_PROMPT
-from agent.tool_registry import ToolRegistry
-from agent.tool import GISRuntime, register_tools
+from agent.prompts.system import SYSTEM_PROMPT as DECISION_SYSTEM_PROMPT, USER_CONTEXT_TEMPLATE
+from agent.tools import ToolRegistry, GISRuntime, create_registry
 from gis.admin_region import extract_admin_region_name
 
 
@@ -223,7 +222,7 @@ class GISAgent:
         self.max_steps = max_steps
         self.memory = MemoryStore(memory_path=memory_path, preferences_path=prefs_path)
         self.runtime = GISRuntime()
-        self.registry = ToolRegistry()
+        self.registry = ToolRegistry(self.runtime)
         self._llm = None
         self._llm_available = False
 
@@ -232,7 +231,7 @@ class GISAgent:
         self._llm_available = True
 
         self._restore_runtime_from_memory()
-        register_tools(self.registry, self.runtime, self.memory.preferences)
+        create_registry(self.registry, self.runtime)
 
     def _restore_runtime_from_memory(self) -> None:
         session = self.memory.session

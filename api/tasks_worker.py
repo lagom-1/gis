@@ -167,8 +167,8 @@ def _execute_gis_task(task_id: int, input_text: str, celery_task_id: str = None)
     logger.info(f"任务 {task_id} 输出目录: {output_dir}")
 
     try:
-        # 初始化 GEE（带锁避免并发初始化）
-        from agent.gee_client import init_gee
+        # 初始化 GEE
+        from gis.gee.client import init_gee
         gee_result = init_gee()
         if not gee_result.get("success"):
             raise RuntimeError(f"GEE 初始化失败: {gee_result.get('message')}")
