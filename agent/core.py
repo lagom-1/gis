@@ -190,6 +190,28 @@ _GEE_TOOLS_NEEDING_REGION = {
 }
 
 
+def _should_auto_make_map(history: List[Dict[str, Any]]) -> bool:
+    """判断是否应在 final 前自动生成专题图"""
+    if not history:
+        return False
+    # 1. 是否有 LST 数据产出
+    data_producers = {"run_lst", "gee_download_monthly_lst"}
+    map_tools = {"make_thematic_map", "generate_web_map", "classify_map",
+                 "gee_lst_timelapse", "gee_lst_timelapse_local", "gee_lst_split_panel",
+                 "generate_timeslider_map"}
+    last_data_idx = -1
+    for i, h in enumerate(history):
+        if h.get("tool") in data_producers and h.get("result", {}).get("success"):
+            last_data_idx = i
+    if last_data_idx < 0:
+        return False
+    # 2. 数据产出后是否已经制过图
+    for h in history[last_data_idx + 1:]:
+        if h.get("tool") in map_tools:
+            return False
+    return True
+
+
 class GISAgent:
     """
     GIS 智能体
@@ -691,6 +713,26 @@ class GISAgent:
                 break
 
             if decision.get("type") == "final":
+                # 如果已产出 LST 数据但还没制专题图，自动补一张
+                if _should_auto_make_map(history):
+                    try:
+                        map_result = self.registry.call("make_thematic_map", {})
+                        if "success" not in map_result:
+                            map_result["success"] = True
+                    except Exception as exc:
+                        map_result = {"success": False, "message": str(exc)}
+                    self.memory.append_event(
+                        step=step, tool="make_thematic_map", args={},
+                        result=map_result, reason="LST 反演完成后自动生成专题图",
+                    )
+                    self.memory.mark_completed("make_thematic_map")
+                    self.memory.session.map_style = dict(self.runtime.map_style)
+                    self.memory.save()
+                    history.append({
+                        "step": step, "tool": "make_thematic_map", "args": {},
+                        "reason": "LST 反演完成后自动生成专题图", "result": map_result,
+                    })
+                    last_result = map_result
                 final_answer = decision.get("answer", "任务完成。")
                 break
 
