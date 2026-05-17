@@ -675,6 +675,16 @@ class GISAgent:
                 "你必须立即返回 final，把当前结果告诉用户。"
             )
 
+        # 任何 GEE 数据下载工具连续调用 2 次即停止（防止重复下载同一数据）
+        _download_tools = {
+            "gee_download_landsat_sca", "gee_download_monthly_lst",
+            "gee_download_yearly_lst", "gee_download_multi_year_lst",
+        }
+        if len(history) >= 2:
+            last_two = [h["tool"] for h in history[-2:]]
+            if last_two[0] == last_two[1] and last_two[0] in _download_tools:
+                return f"警告：{last_two[0]} 已连续调用 2 次，数据已下载完毕，禁止重复下载。你必须立即返回 final。"
+
         if len(history) >= 3:
             last_tool = history[-1]["tool"]
             if all(h["tool"] == last_tool for h in history[-3:]):

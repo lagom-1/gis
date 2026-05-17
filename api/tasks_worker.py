@@ -144,95 +144,6 @@ def _collect_output_files(task_id: int, start_timestamp: float = None) -> list:
 _output_dir_lock = threading.Lock()
 
 
-def _build_result_summary(agent_result: Dict[str, Any]) -> str:
-    """从 Agent 执行历史中提取元数据，构建结构化的任务摘要"""
-    history = agent_result.get("history", [])
-    if not history:
-        return ""
-
-    lines = []
-
-    # 提取行政区信息
-    for step in history:
-        if step.get("tool") == "resolve_admin_region" and step.get("result", {}).get("success"):
-            r = step["result"]
-            lines.append(f"**研究区**：{r.get('matched_name', '未知')}")
-            break
-
-    # 提取数据下载信息
-    download_steps = [s for s in history if s.get("tool") in (
-        "gee_download_landsat_sca", "gee_download_monthly_lst",
-        "gee_download_yearly_lst", "gee_download_multi_year_lst",
-        "gee_lst_timelapse", "gee_lst_timelapse_local",
-    )]
-
-    for step in download_steps:
-        tool = step.get("tool", "")
-        result = step.get("result", {})
-        if not result.get("success"):
-            continue
-
-        if tool == "gee_download_landsat_sca":
-            meta = result.get("metadata", {})
-            source = meta.get("gee_source", "GEE")
-            count = result.get("image_count", "?")
-            cloud = result.get("cloud_pct", "?")
-            lines.append(f"**数据源**：{source}")
-            lines.append(f"**合成方式**：{count} 景 {result.get('reducer', 'median')} 合成（云量阈值 {cloud}%）")
-
-        elif tool == "gee_download_monthly_lst":
-            quality = result.get("quality", "?")
-            scenes = result.get("scene_count", "?")
-            total = result.get("total_scenes_in_month", "?")
-            method = result.get("metadata", {}).get("method", "")
-            lines.append(f"**数据源**：Landsat 8/9 Collection 2 Level-2 Tier 1")
-            lines.append(f"**质量等级**：{quality}（{total} 景中选用 {scenes} 景，{method}）")
-
-        elif tool in ("gee_download_yearly_lst", "gee_download_multi_year_lst"):
-            quality_summary = result.get("quality_summary", {})
-            success_count = result.get("success_count", 0)
-            quality_str = "、".join(f"{k}级: {v}个月" if tool == "gee_download_yearly_lst" else f"{k}级: {v}年"
-                                    for k, v in sorted(quality_summary.items()))
-            lines.append(f"**数据源**：Landsat 8/9 Collection 2 Level-2 Tier 1")
-            lines.append(f"**完成情况**：{success_count} 个时段成功")
-            if quality_str:
-                lines.append(f"**质量分布**：{quality_str}")
-
-        elif tool == "gee_lst_timelapse_local":
-            years_ok = result.get("years_ok", [])
-            years_fail = result.get("years_failed", [])
-            gif_size = result.get("gif_size_mb", 0)
-            lines.append(f"**数据源**：Landsat 8/9 Collection 2 Level-2 Tier 1")
-            lines.append(f"**时间跨度**：{years_ok[0]}-{years_ok[-1]}年（{len(years_ok)} 年成功）" if years_ok else "")
-            if years_fail:
-                lines.append(f"**跳过年份**：{years_fail}（无可用影像）")
-            if gif_size:
-                lines.append(f"**GIF 大小**：{gif_size} MB")
-
-        elif tool == "gee_lst_timelapse":
-            years = result.get("years", [])
-            lines.append(f"**数据源**：Landsat 8/9 Collection 2 Level-2 Tier 1")
-            lines.append(f"**时间跨度**：{years[0]}-{years[-1]}年" if years else "")
-
-    # 提取 LST 反演信息
-    lst_steps = [s for s in history if s.get("tool") == "run_lst" and s.get("result", {}).get("success")]
-    if lst_steps:
-        lines.append(f"**温度反演**：SCA 单通道算法（已完成）")
-
-    # 统计输出文件
-    output_count = sum(1 for s in history if s.get("tool") in (
-        "make_thematic_map", "classify_map", "statistics", "generate_web_map",
-        "generate_timeslider_map", "gee_lst_split_panel", "gee_lst_trend_chart",
-    ) and s.get("result", {}).get("success"))
-
-    if output_count:
-        lines.append(f"**生成结果**：{output_count} 个可视化产物")
-
-    # 过滤空行并拼接
-    result_text = "\n".join(line for line in lines if line)
-    return result_text
-
-
 def _execute_gis_task(task_id: int, input_text: str, celery_task_id: str = None) -> Dict[str, Any]:
     """实际执行 GIS 任务的核心逻辑"""
     logger.info(f"开始执行任务 {task_id}: {input_text}")
@@ -268,14 +179,7 @@ def _execute_gis_task(task_id: int, input_text: str, celery_task_id: str = None)
         # 收集任务输出文件
         output_files = _collect_output_files(task_id, start_timestamp=task_start_timestamp)
         run_log_path = result.get("run_log", {}).get("log_path") if isinstance(result.get("run_log"), dict) else None
-
-        # 构建结构化摘要（数据源、质量、产品类型）
-        metadata_summary = _build_result_summary(result)
-        llm_answer = result.get("final_answer", "")
-        if metadata_summary:
-            final_answer = f"{llm_answer}\n\n---\n**任务详情**\n{metadata_summary}"
-        else:
-            final_answer = llm_answer
+        final_answer = result.get("final_answer", "")
 
         _update_task_status(
             task_id,
