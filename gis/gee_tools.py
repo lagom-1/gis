@@ -147,7 +147,7 @@ def _normalize_region(region: Any = None, region_path: Optional[str] = None):
     raise ValueError("region 仅支持 bbox [xmin,ymin,xmax,ymax]、GeoJSON dict 或 region_path")
 
 
-from ._gee_common import mask_clouds_qa as _mask_clouds_qa
+from ._gee_common import fill_holes as _fill_holes, mask_clouds_qa as _mask_clouds_qa
 
 
 def _landsat89_l2_collection(region_geom, start_date: str, end_date: str, cloud_pct: float = 15, hard_filter: bool = True, max_scenes: int | None = None, distribute_periods: int | None = None):
@@ -207,18 +207,28 @@ def _landsat89_l2_collection(region_geom, start_date: str, end_date: str, cloud_
     return merged
 
 
-def _reduce_collection(col, reducer: str = "median", mask_clouds: bool = True) -> ee.Image:
+def _reduce_collection(
+    col,
+    reducer: str = "median",
+    mask_clouds: bool = True,
+    fill_holes_after: bool = True,
+) -> ee.Image:
     if mask_clouds:
         col = col.map(_mask_clouds_qa)
 
     reducer = (reducer or "median").lower()
     if reducer == "mean":
-        return col.mean()
-    if reducer == "mosaic":
-        return col.mosaic()
-    if reducer == "first":
-        return ee.Image(col.first())
-    return col.median()
+        img = col.mean()
+    elif reducer == "mosaic":
+        img = col.mosaic()
+    elif reducer == "first":
+        img = ee.Image(col.first())
+    else:
+        img = col.median()
+
+    if fill_holes_after:
+        img = _fill_holes(img)
+    return img
 
 
 def _estimate_download_size(geom, scale: int = 30) -> Optional[Dict[str, Any]]:
@@ -580,13 +590,7 @@ def gee_compute_lst(
         # 云掩膜
         qa = col.first().select("QA_PIXEL").bandNames()
         if qa:
-            def _mask_clouds(image):
-                qa = image.select("QA_PIXEL")
-                cloud_bit = 1 << 3
-                shadow_bit = 1 << 4
-                mask = qa.bitwiseAnd(cloud_bit).eq(0).And(qa.bitwiseAnd(shadow_bit).eq(0))
-                return image.updateMask(mask)
-            col = col.map(_mask_clouds)
+            col = col.map(_mask_clouds_qa)
 
         # GEE 端单通道 LST 反演
         def _compute_lst(image):

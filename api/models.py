@@ -49,6 +49,23 @@ class OrderStatus(str, enum.Enum):
     CANCELLED = "cancelled"
 
 
+class ConversationStatus(str, enum.Enum):
+    """会话状态"""
+    ACTIVE = "active"
+    PROCESSING = "processing"
+    ARCHIVED = "archived"
+
+
+class MessageRole(str, enum.Enum):
+    """消息角色"""
+    USER = "user"
+    ASSISTANT = "assistant"
+    SYSTEM = "system"
+    TOOL_CALL = "tool_call"
+    TOOL_RESULT = "tool_result"
+    ASK_USER = "ask_user"
+
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  SQLAlchemy ORM 模型
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -67,6 +84,7 @@ class User(Base):
 
     # 关系
     tasks = relationship("Task", back_populates="user", lazy="dynamic")
+    conversations = relationship("Conversation", back_populates="user", lazy="dynamic")
     orders = relationship("Order", back_populates="user", lazy="dynamic")
     downloads = relationship("Download", back_populates="user", lazy="dynamic")
 
@@ -94,11 +112,77 @@ class Task(Base):
     run_log_path = Column(String(512), nullable=True, comment="运行日志文件路径")
     current_step = Column(Integer, nullable=True, default=0, comment="当前执行步骤编号")
     step_description = Column(Text, nullable=True, comment="当前步骤描述（工具名+参数摘要）")
+    conversation_id = Column(Integer, ForeignKey("conversations.id"), nullable=True, index=True, comment="所属会话 ID")
+    turn_index = Column(Integer, nullable=True, default=0, comment="会话中的第几轮")
 
     # 关系
     user = relationship("User", back_populates="tasks")
+    conversation = relationship("Conversation", back_populates="tasks")
     orders = relationship("Order", back_populates="task", lazy="dynamic")
     downloads = relationship("Download", back_populates="task", lazy="dynamic")
+
+
+class Conversation(Base):
+    """会话表：多轮对话的顶层容器"""
+    __tablename__ = "conversations"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    title = Column(String(256), default="", nullable=False, comment="会话标题")
+    status = Column(
+        Enum(ConversationStatus),
+        default=ConversationStatus.ACTIVE,
+        nullable=False,
+        index=True,
+    )
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    # 关系
+    user = relationship("User", back_populates="conversations")
+    messages = relationship("Message", back_populates="conversation", lazy="dynamic", cascade="all, delete-orphan")
+    tasks = relationship("Task", back_populates="conversation", lazy="dynamic")
+    state = relationship("ConversationState", back_populates="conversation", uselist=False, cascade="all, delete-orphan")
+
+
+class Message(Base):
+    """消息表：会话中的每条消息（用户输入、助手回复、工具调用等）"""
+    __tablename__ = "messages"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    conversation_id = Column(Integer, ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False, index=True)
+    role = Column(String(16), nullable=False, comment="user/assistant/system/tool_call/tool_result/ask_user")
+    content = Column(Text, nullable=False, comment="消息文本或 JSON")
+    tool_name = Column(String(64), nullable=True, comment="调用的工具名（tool_call/tool_result）")
+    tool_args = Column(JSON, nullable=True, comment="工具参数（tool_call）")
+    tool_result = Column(JSON, nullable=True, comment="工具执行结果（tool_result）")
+    step_number = Column(Integer, nullable=True, comment="当前轮内的步骤编号")
+    output_files = Column(JSON, nullable=True, comment="本轮产出的文件列表")
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+    # 关系
+    conversation = relationship("Conversation", back_populates="messages")
+
+
+class ConversationState(Base):
+    """会话状态表：持久化 GISRuntime 运行时状态，跨轮次保留"""
+    __tablename__ = "conversation_states"
+
+    conversation_id = Column(Integer, ForeignKey("conversations.id", ondelete="CASCADE"), primary_key=True)
+    current_dataset = Column(Text, nullable=True, comment="当前工作数据集路径")
+    source_dataset = Column(Text, nullable=True, comment="原始源数据集路径")
+    last_output = Column(Text, nullable=True, comment="最后输出文件路径")
+    last_tif_output = Column(Text, nullable=True, comment="最后 TIFF 输出路径")
+    product_type = Column(String(32), nullable=True, comment="推断的产品类型")
+    last_region_geojson = Column(Text, nullable=True, comment="最近解析的行政区 GeoJSON（JSON 字符串）")
+    last_region_name = Column(String(256), nullable=True, comment="最近解析的行政区名称")
+    map_style = Column(JSON, nullable=True, comment="地图样式参数")
+    known_facts = Column(JSON, nullable=True, comment="累积的已知事实")
+    preferences = Column(JSON, nullable=True, comment="用户偏好")
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    # 关系
+    conversation = relationship("Conversation", back_populates="state")
 
 
 class Order(Base):
@@ -248,3 +332,64 @@ class MessageResponse(BaseModel):
     success: bool
     message: str
     data: Optional[Dict[str, Any]] = None
+
+
+# ── 会话 ──────────────────────────────────────────────────
+
+class ConversationCreateRequest(BaseModel):
+    """创建会话请求"""
+    title: Optional[str] = Field(None, max_length=256, description="会话标题，不填则从首条消息自动生成")
+    initial_message: Optional[str] = Field(None, max_length=2000, description="首条用户消息")
+
+
+class MessageCreateRequest(BaseModel):
+    """发送消息请求"""
+    content: str = Field(..., min_length=1, max_length=2000, description="消息文本")
+
+
+class ConversationMessageResponse(BaseModel):
+    """会话消息响应"""
+    id: int
+    conversation_id: int
+    role: str
+    content: str
+    tool_name: Optional[str] = None
+    tool_args: Optional[Dict[str, Any]] = None
+    tool_result: Optional[Dict[str, Any]] = None
+    step_number: Optional[int] = None
+    output_files: Optional[List[Dict[str, Any]]] = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ConversationResponse(BaseModel):
+    """会话信息响应"""
+    id: int
+    user_id: int
+    title: str
+    status: ConversationStatus
+    created_at: datetime
+    updated_at: datetime
+    last_message: Optional[ConversationMessageResponse] = None
+    message_count: Optional[int] = None
+
+    model_config = {"from_attributes": True}
+
+
+class ConversationListResponse(BaseModel):
+    """会话列表响应"""
+    conversations: List[ConversationResponse]
+    total: int
+    page: int
+    page_size: int
+
+
+class ConversationStateResponse(BaseModel):
+    """会话状态响应"""
+    conversation_id: int
+    current_dataset: Optional[str] = None
+    last_region_name: Optional[str] = None
+    map_style: Optional[Dict[str, Any]] = None
+
+    model_config = {"from_attributes": True}

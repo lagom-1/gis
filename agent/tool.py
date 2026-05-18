@@ -71,7 +71,7 @@ from gis.time_slider import generate_time_slider_map
 from gis.ee_classification import ee_unsupervised_classify, ee_supervised_classify
 
 # ── A8: 分区统计 ─────────────────────────────────────
-from gis.zonal_stats import gee_zonal_statistics
+# 延迟导入：gee_zonal_statistics 在 zonal_stats_tool 中惰性加载（避免 GEE 未初始化时报错）
 
 
 class GISRuntime:
@@ -99,6 +99,36 @@ class GISRuntime:
         self.last_region_geojson = None
         self.last_region_name = None
         # last_output 和 map_style 保留，因为它们属于会话级偏好
+
+    def to_dict(self) -> Dict[str, Any]:
+        """序列化为 dict，用于持久化到 conversation_states 表。"""
+        region_geojson = self.last_region_geojson
+        # GeoJSON 可能在 _normalize_region 过程中变成 ee.Geometry，
+        # 此时保留原始的 dict 形式即可
+        if region_geojson is not None and not isinstance(region_geojson, dict):
+            region_geojson = None  # ee.Geometry 不可序列化
+        return {
+            "current_dataset": self.current_dataset,
+            "source_dataset": self.source_dataset,
+            "last_output": self.last_output,
+            "last_tif_output": self.last_tif_output,
+            "last_region_geojson": region_geojson,
+            "last_region_name": self.last_region_name,
+            "map_style": dict(self.map_style),
+        }
+
+    def from_dict(self, data: Dict[str, Any]) -> None:
+        """从 dict 恢复状态。"""
+        if not data:
+            return
+        self.current_dataset = data.get("current_dataset") or self.current_dataset
+        self.source_dataset = data.get("source_dataset") or self.source_dataset
+        self.last_output = data.get("last_output") or self.last_output
+        self.last_tif_output = data.get("last_tif_output") or self.last_tif_output
+        self.last_region_geojson = data.get("last_region_geojson") or self.last_region_geojson
+        self.last_region_name = data.get("last_region_name") or self.last_region_name
+        if data.get("map_style"):
+            self.map_style.update(data["map_style"])
 
     def current_tif(self) -> str | None:
         if self.current_dataset and os.path.exists(self.current_dataset):
@@ -1129,6 +1159,7 @@ def register_tools(registry: ToolRegistry, runtime: GISRuntime, preferences: Dic
         region_name = runtime.last_region_name or "zonal"
         csv_path = str(out_dir() / f"{region_name}_zonal_stats.csv")
 
+        from gis.zonal_stats import gee_zonal_statistics
         result = gee_zonal_statistics(
             image=image_input,
             regions=ee_fc,

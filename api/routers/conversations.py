@@ -69,7 +69,7 @@ async def create_conv(
         )
 
     last_msg = get_last_message(db, conv.id)
-    msg_count = db.query(MessageResponse).count() if False else None  # lazy
+    # msg_count is computed below
 
     return ConversationResponse(
         id=conv.id,
@@ -222,10 +222,7 @@ async def send_message(
 
     # 2. 加载会话状态
     from api.services.conversation_service import load_conversation_state
-    saved_state = load_conversation_state(db, conv_id)
 
-    # 3. 加载之前的对话历史
-    from api.services.conversation_service import load_conversation_state
     saved_state = load_conversation_state(db, conv_id)
     history_messages = [
         {
@@ -238,15 +235,16 @@ async def send_message(
     ]
 
     # 4. 执行 ConversationalAgent
-    from tools import ToolRegistry
-    from tools.runtime import GISRuntime
+    from agent.tool_registry import ToolRegistry
+    from agent.tool import GISRuntime, register_tools
     from agent.llm import LLMClient
     from agent.engine import AgentLoop
 
     runtime = GISRuntime()
     if saved_state:
         runtime.from_dict(saved_state)
-    registry = ToolRegistry(runtime)
+    registry = ToolRegistry()
+    register_tools(registry, runtime, {})
     llm = LLMClient()
     agent = AgentLoop(llm, registry, runtime)
 
@@ -366,15 +364,16 @@ async def send_message_stream(
         for m in get_conversation_messages(db, conv_id, limit=100)
     ]
 
-    from tools import ToolRegistry
-    from tools.runtime import GISRuntime
+    from agent.tool_registry import ToolRegistry
+    from agent.tool import GISRuntime, register_tools
     from agent.llm import LLMClient
     from agent.engine import AgentLoop
 
     runtime = GISRuntime()
     if saved_state:
         runtime.from_dict(saved_state)
-    registry = ToolRegistry(runtime)
+    registry = ToolRegistry()
+    register_tools(registry, runtime, {})
     llm = LLMClient()
     agent = AgentLoop(llm, registry, runtime)
 
@@ -382,25 +381,32 @@ async def send_message_stream(
     tool_history: list = []
     final_result: dict = {}
 
+    import concurrent.futures
+    from collections import deque
+
+    # 标记执行状态：用于前端轮询检测
+    from api.models import ConversationStatus
+    conv.status = ConversationStatus.PROCESSING
+    db.commit()
+
     async def event_generator() -> AsyncGenerator[str, None]:
         nonlocal tool_history, final_result
 
-        # 用队列桥接同步 event_callback 和异步 generator
-        queue: asyncio.Queue = asyncio.Queue()
+        events: deque = deque()
+        import threading
+        lock = threading.Lock()
+
+        # 跟踪已保存到 DB 的工具步骤，避免重复
+        saved_steps: set = set()
+        # 错误跟踪
+        error_occurred = False
+        error_message = ""
 
         def sync_callback(event_type: str, data: dict):
-            """同步回调：将事件放入异步队列"""
-            try:
-                loop = asyncio.get_event_loop()
-            except RuntimeError:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-            loop.call_soon_threadsafe(
-                queue.put_nowait, (event_type, data)
-            )
+            with lock:
+                events.append((event_type, data))
 
-        # 在后台线程中运行 Agent
-        import threading
+        loop = asyncio.get_running_loop()
 
         def run_agent():
             nonlocal tool_history, final_result
@@ -412,46 +418,77 @@ async def send_message_stream(
                 )
                 tool_history = result.get("history", [])
                 final_result = result
+                sync_callback("done", {})
             except Exception as exc:
                 logger.error(f"Agent SSE 执行失败: {exc}", exc_info=True)
-                try:
-                    loop = asyncio.get_event_loop()
-                except RuntimeError:
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                loop.call_soon_threadsafe(
-                    queue.put_nowait, ("error", {"message": str(exc)})
-                )
+                sync_callback("error", {"message": str(exc)})
 
-        thread = threading.Thread(target=run_agent, daemon=True)
-        thread.start()
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        future = loop.run_in_executor(executor, run_agent)
 
-        # 心跳定时器
-        async def heartbeat_sender():
-            while thread.is_alive():
-                await asyncio.sleep(15)
-                if thread.is_alive():
-                    yield "event: heartbeat\ndata: {}\n\n"
+        # 当前正在执行的工具名（用于增量保存）
+        current_tool_name = ""
+        current_tool_args = {}
 
-        hb_task = asyncio.ensure_future(_consume_heartbeat(heartbeat_sender))
+        # 轮询事件直到完成，同时增量保存工具结果到 DB
+        while not future.done() or events:
+            with lock:
+                batch = list(events)
+                events.clear()
+            for event_type, data in batch:
+                yield f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
-        try:
-            while thread.is_alive() or not queue.empty():
-                try:
-                    event_type, data = await asyncio.wait_for(queue.get(), timeout=0.5)
-                    yield f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
-                    if event_type in ("final_answer", "ask_user", "error"):
-                        break
-                except asyncio.TimeoutError:
-                    continue
-        finally:
-            hb_task.cancel()
-            thread.join(timeout=5)
+                if event_type == "tool_start":
+                    current_tool_name = str(data.get("tool", ""))
+                    current_tool_args = data.get("args") or {}
 
-        # 保存工具调用到 DB
-        for h in tool_history:
+                elif event_type == "tool_result":
+                    # 增量保存：每个工具执行完立即写入 DB
+                    tool_name = current_tool_name or str(data.get("tool", ""))
+                    result_data = data.get("result") or {}
+                    step_key = f"{tool_name}-{len(saved_steps)}"
+                    if step_key not in saved_steps:
+                        saved_steps.add(step_key)
+                        step_num = len(saved_steps)
+                        # 保存 tool_call
+                        add_message(
+                            db, conv_id,
+                            role="tool_call",
+                            content=f"调用工具: {tool_name}",
+                            tool_name=tool_name,
+                            tool_args=current_tool_args,
+                            step_number=step_num,
+                        )
+                        # 保存 tool_result
+                        add_message(
+                            db, conv_id,
+                            role="tool_result",
+                            content=result_data.get("message", ""),
+                            tool_name=tool_name,
+                            tool_result=result_data,
+                            step_number=step_num,
+                        )
+
+                elif event_type == "error":
+                    error_occurred = True
+                    error_message = str(data.get("message", ""))
+                    break
+                elif event_type in ("final_answer", "ask_user", "done"):
+                    break
+            if batch:
+                continue
+            await asyncio.sleep(0.2)
+
+        executor.shutdown(wait=False)
+
+        # 保存尚未保存的工具调用（兜底）
+        for i, h in enumerate(tool_history):
             step = h.get("step", 0)
             tool = h.get("tool", "")
+            step_key = f"{tool}-{i}"
+            if step_key in saved_steps:
+                continue
+            saved_steps.add(step_key)
             args = h.get("args", {})
             tool_result = h.get("result", {})
             reason = h.get("reason", "")
@@ -474,11 +511,14 @@ async def send_message_stream(
             )
 
         # 保存最终回复
-        result_type = final_result.get("type", "final")
-        if result_type == "ask_user":
-            assistant_content = final_result.get("question", "")
+        if error_occurred:
+            assistant_content = error_message or "执行失败"
         else:
-            assistant_content = final_result.get("answer", "任务完成。")
+            result_type = final_result.get("type", "final")
+            if result_type == "ask_user":
+                assistant_content = final_result.get("question", "")
+            else:
+                assistant_content = final_result.get("answer", "任务完成。")
 
         add_message(
             db, conv_id,
@@ -487,8 +527,10 @@ async def send_message_stream(
             output_files=None,
         )
 
-        # 保存状态
+        # 保存状态并恢复会话状态
         save_conversation_state(db, conv_id, runtime.to_dict())
+        conv.status = ConversationStatus.ACTIVE
+        db.commit()
 
         # 发送完成信号
         yield f"event: done\ndata: {{}}\n\n"
@@ -504,7 +546,3 @@ async def send_message_stream(
     )
 
 
-async def _consume_heartbeat(generator):
-    """消费心跳事件"""
-    async for _ in generator:
-        pass

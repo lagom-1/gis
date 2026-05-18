@@ -99,7 +99,7 @@ def register_all_tools(registry: ToolRegistry, runtime: GISRuntime):
 
     # ── gee_download_lst ──
     def gee_download_lst_tool(args):
-        from gis.gee import init_gee, filter_collection, mask_clouds_qa, reduce_collection, compute_lst, download_tif
+        from gis.gee import init_gee, filter_collection_with_meta, reduce_collection, compute_lst, download_tif
         from gis.gee_tools import _normalize_region
 
         start_date = args.get("start_date")
@@ -124,10 +124,11 @@ def register_all_tools(registry: ToolRegistry, runtime: GISRuntime):
                 return init
 
             geom = _normalize_region(region=region)
-            col = filter_collection(geom, start_date, end_date, cloud_pct)
-            count = col.size().getInfo()
+            col, meta = filter_collection_with_meta(geom, start_date, end_date, cloud_pct)
+            count = meta["scene_count"]
+            used_cloud_pct = meta["used_cloud_pct"]
             if count == 0:
-                return {"success": False, "message": f"{start_date}~{end_date} 云量≤{cloud_pct}% 无可用影像"}
+                return {"success": False, "message": f"{start_date}~{end_date} 无可用 Landsat 影像"}
 
             img = reduce_collection(col, args.get("reducer", "median"), mask_clouds=True, region_geom=geom)
             lst = compute_lst(img)
@@ -157,9 +158,13 @@ def register_all_tools(registry: ToolRegistry, runtime: GISRuntime):
             except Exception:
                 stats_info = {"min": 0, "max": 0, "mean": 0}
 
+            msg = f"LST 反演完成：{count}景合成，{stats_info['min']}~{stats_info['max']}°C"
+            if used_cloud_pct > float(cloud_pct):
+                msg += f"（云量阈值由 {cloud_pct}% 放宽至 {used_cloud_pct}%）"
             return {"success": True,
-                    "message": f"LST 反演完成：{count}景合成，{stats_info['min']}~{stats_info['max']}°C",
-                    "output_tif": output_tif, "scene_count": count, **stats_info}
+                    "message": msg,
+                    "output_tif": output_tif, "scene_count": count,
+                    "used_cloud_pct": used_cloud_pct, **stats_info}
 
         except Exception as e:
             return {"success": False, "message": f"LST 下载失败: {e}"}
@@ -171,7 +176,7 @@ def register_all_tools(registry: ToolRegistry, runtime: GISRuntime):
 
     # ── gee_lst_timelapse ──
     def gee_lst_timelapse_tool(args):
-        from gis.gee import init_gee, filter_collection, mask_clouds_qa, reduce_collection, compute_lst, download_tif
+        from gis.gee import init_gee, filter_collection_with_meta, reduce_collection, compute_lst, download_tif
         from gis.gee_tools import _normalize_region
         from gis.gee_timelapse import generate_lst_timelapse
 
@@ -294,3 +299,7 @@ def register_all_tools(registry: ToolRegistry, runtime: GISRuntime):
     registry.register("gee_init", gee_init_tool,
         "初始化 Google Earth Engine 认证。GEE 操作失败提示未认证时调用。",
         {"force_auth": "是否强制重新认证"})
+
+
+# 别名，供 agent.tools 导出使用
+create_registry = register_all_tools

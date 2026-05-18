@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { Send, Loader2, Image as ImageIcon, Film, BarChart3, ChevronLeft, ChevronRight, Trash2, FileImage, FileText, Download, Maximize2, Minimize2, Cpu, Clock } from 'lucide-react'
+import { Send, Loader2, Image as ImageIcon, Film, BarChart3, ChevronLeft, ChevronRight, Trash2, FileImage, FileText, Download, Maximize2, Minimize2, Clock } from 'lucide-react'
 import { useAppStore, type OutputFile } from '../stores/appStore'
 import { tasksService } from '../services/tasks'
 import ViewerRouter from '../components/ViewerRouter'
@@ -50,7 +50,7 @@ export default function Workspace() {
   const getFileUrl = (file: OutputFile) => `/api/downloads/${activeTaskId}/${encodeURIComponent(file.name)}`
   const getPreviewUrl = (file: OutputFile) => {
     if (isTifFile(file.name) && activeTaskId) {
-      return `/api/downloads/${currentTask.id}/preview/${encodeURIComponent(file.name)}`
+      return `/api/downloads/${activeTaskId}/preview/${encodeURIComponent(file.name)}`
     }
     return getFileUrl(file)
   }
@@ -115,7 +115,7 @@ export default function Workspace() {
     setInput('')
     setProcessing(true)
     setExecutionStep(1)
-    setExecutionTool('')
+    setExecutionStep(0, '')
 
     addMessage({ role: 'user', content: userMessage })
 
@@ -152,12 +152,12 @@ export default function Workspace() {
         if (abortController.signal.aborted) return
         task = await tasksService.getTask(task.id)
         setExecutionStep(task.current_step || 0)
-        setExecutionTool(task.step_description || '')
+        setExecutionStep(0, task.step_description || '')
       }
 
       if (abortController.signal.aborted) return
       setExecutionStep(0)
-      setExecutionTool('')
+      setExecutionStep(0, '')
       setProcessing(false, null)
 
       // task stored in appStore

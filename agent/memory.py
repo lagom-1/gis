@@ -191,3 +191,30 @@ class MemoryStore:
         run_path = RUNS_DIR / f"{self.session.task_id}.json"
         run_path.write_text(json.dumps(agent_result, ensure_ascii=False, indent=2), encoding="utf-8")
         return str(run_path)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """序列化 MemoryStore 状态为 dict。"""
+        return {
+            "current_dataset": self.session.current_dataset,
+            "source_dataset": self.session.source_dataset,
+            "product_type": self.session.product_type,
+            "current_output": self.session.current_output,
+            "map_style": self.session.map_style,
+            "known_facts": self.session.known_facts,
+            "preferences": self.preferences,
+        }
+
+    def from_dict(self, data: Dict[str, Any]) -> None:
+        """从 dict 恢复 MemoryStore 状态。"""
+        if not data:
+            return
+        self.session.current_dataset = data.get("current_dataset") or self.session.current_dataset
+        self.session.source_dataset = data.get("source_dataset") or self.session.source_dataset
+        self.session.product_type = data.get("product_type") or self.session.product_type
+        self.session.current_output = data.get("current_output") or self.session.current_output
+        if data.get("map_style"):
+            self.session.map_style.update(data["map_style"])
+        if data.get("known_facts"):
+            self.session.known_facts.update(data["known_facts"])
+        if data.get("preferences"):
+            self.preferences.update(data["preferences"])

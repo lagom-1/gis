@@ -10,6 +10,7 @@ import Submit from './pages/Submit'
 import TaskPage from './pages/TaskPage'
 import Profile from './pages/Profile'
 import Workspace from './pages/Workspace'
+import Conversations from './pages/Conversations'
 
 export default function App() {
   const { token, fetchUser } = useAuthStore()
@@ -33,6 +34,8 @@ export default function App() {
         <Route path="profile" element={<Profile />} />
         <Route path="workspace" element={<Workspace />} />
         <Route path="workspace/:projectId" element={<Workspace />} />
+        <Route path="conversations" element={<Conversations />} />
+        <Route path="conversations/:id" element={<Conversations />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

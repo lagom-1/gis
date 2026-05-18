@@ -90,17 +90,22 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 # ── 注册路由 ──────────────────────────────────────────────
 
-from api.routers import auth, downloads, payments, tasks
+from api.routers import auth, conversations, downloads, payments, tasks
 
 app.include_router(auth.router)
 app.include_router(tasks.router)
+app.include_router(conversations.router)
 app.include_router(payments.router)
 app.include_router(downloads.router)
 
 
-# 注意：/outputs/ 不再公开挂载为静态文件
-# 所有文件下载必须通过 /api/downloads/ 端点（带付费检查）
-# 预览图片通过 /api/downloads/{task_id}/preview/{filename} 端点
+from fastapi.staticfiles import StaticFiles
+from pathlib import Path
+
+# 挂载输出文件目录（开发/预览用，生产环境应走 /api/downloads/ 带付费检查）
+workspace_outputs = Path("workspace/outputs")
+workspace_outputs.mkdir(parents=True, exist_ok=True)
+app.mount("/outputs", StaticFiles(directory=str(workspace_outputs)), name="outputs")
 
 
 # ── 健康检查 ──────────────────────────────────────────────

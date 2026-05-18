@@ -5,13 +5,6 @@ GEE 共用工具函数
 
 from __future__ import annotations
 
-import ee
+from gis.gee.collection import fill_holes, mask_clouds_qa
 
-
-def mask_clouds_qa(image: ee.Image) -> ee.Image:
-    """Landsat Collection 2 QA_PIXEL 云掩膜：屏蔽 Cloud (Bit 3) 和 Cloud Shadow (Bit 4)"""
-    qa = image.select("QA_PIXEL")
-    cloud_bit = 1 << 3
-    shadow_bit = 1 << 4
-    mask = qa.bitwiseAnd(cloud_bit).eq(0).And(qa.bitwiseAnd(shadow_bit).eq(0))
-    return image.updateMask(mask)
+__all__ = ["mask_clouds_qa", "fill_holes"]

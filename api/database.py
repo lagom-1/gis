@@ -62,6 +62,8 @@ def _auto_migrate_columns() -> None:
                 ("final_answer", "TEXT"),
                 ("current_step", "INTEGER DEFAULT 0"),
                 ("step_description", "TEXT"),
+                ("conversation_id", "INTEGER REFERENCES conversations(id)"),
+                ("turn_index", "INTEGER DEFAULT 0"),
             ]
             for col_name, col_type in missing_cols:
                 if col_name not in existing_cols:

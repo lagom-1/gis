@@ -1,3 +1,18 @@
+export type {
+  Conversation,
+  ConversationCreateRequest,
+  ConversationListResponse,
+  ConversationMessage,
+  Message,
+  MessageCreateRequest,
+  OutputFile,
+  SendMessageResponse,
+  SSEEvent,
+  SSEEventType,
+  ExecutionPhase,
+  ToolCall,
+} from './conversation'
+
 export interface User {
   id: number
   username: string
