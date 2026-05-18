@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { ChevronDown, ChevronRight, Check, X, Loader2, Settings } from 'lucide-react'
 import type { ToolCall } from '../../types/conversation'
+import { getToolDisplayName } from '../../services/toolNames'
 
 interface Props { call: ToolCall }
 
@@ -15,6 +16,7 @@ export function ToolCallCard({ call }: Props) {
   const [expanded, setExpanded] = useState(false)
   const s = STATUS[call.status] || STATUS.pending
   const Icon = s.icon
+  const displayName = getToolDisplayName(call.tool)
 
   return (
     <div className="my-1">
@@ -23,13 +25,18 @@ export function ToolCallCard({ call }: Props) {
         className={`flex items-center gap-2 w-full text-left px-3 py-1.5 rounded-lg text-xs transition-colors ${s.bg} ${call.result ? 'cursor-pointer hover:brightness-95' : ''}`}
       >
         <Icon className={`h-3 w-3 flex-shrink-0 ${s.color}`} />
-        <span className="font-medium text-gray-700 flex-1 truncate">{call.tool}</span>
+        <div className="flex-1 min-w-0">
+          <span className="font-medium text-gray-700">{displayName}</span>
+          {call.reason && call.status === 'running' && (
+            <span className="ml-2 text-gray-400 text-[11px]">{call.reason}</span>
+          )}
+        </div>
         {call.result && (
           <>
-            <span className={`text-[10px] ${call.status === 'error' ? 'text-red-500' : 'text-gray-400'}`}>
+            <span className={`text-[10px] flex-shrink-0 ${call.status === 'error' ? 'text-red-500' : 'text-gray-400'}`}>
               {call.status === 'error' ? '失败' : '完成'}
             </span>
-            {expanded ? <ChevronDown className="h-3 w-3 text-gray-400" /> : <ChevronRight className="h-3 w-3 text-gray-400" />}
+            {expanded ? <ChevronDown className="h-3 w-3 text-gray-400 flex-shrink-0" /> : <ChevronRight className="h-3 w-3 text-gray-400 flex-shrink-0" />}
           </>
         )}
       </button>

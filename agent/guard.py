@@ -41,6 +41,17 @@ class SafetyGuard:
             if last_two[0] == last_two[1] and last_two[0] in _download_tools:
                 return f"{last_two[0]} 已连续调用 2 次，数据已下载完毕，禁止重复下载。你必须立即返回 final。"
 
+        # 幂等工具：已成功执行过则禁止重复调用
+        _IDEMPOTENT_ONCE = {"resolve_admin_region", "gee_init"}
+        last_tool = history[-1].get("tool")
+        if last_tool in _IDEMPOTENT_ONCE:
+            prev_success = [
+                h for h in history[:-1]
+                if h.get("tool") == last_tool and h.get("result", {}).get("success")
+            ]
+            if prev_success:
+                return f"{last_tool} 已成功执行过，禁止重复调用。请使用已有结果继续下一步。你必须立即返回 final。"
+
         # 同一工具连续 3 次
         if len(history) >= 3:
             last_tool = history[-1].get("tool")

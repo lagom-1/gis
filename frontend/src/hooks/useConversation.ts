@@ -109,6 +109,7 @@ export function useConversation(): UseConversationReturn {
             tool: data.tool as string,
             args: data.args as Record<string, unknown>,
             status: 'running' as const,
+            reason: data.reason as string | undefined,
           },
         ])
         break

@@ -82,25 +82,27 @@ export default function Conversations() {
   const loadMessages = useCallback(async (cId: number) => {
     setLoadingMessages(true)
     try {
-      const result = await conversationsApi.getMessages(cId, 100)
+      const [result, convDetail] = await Promise.all([
+        conversationsApi.getMessages(cId, 100),
+        conversationsApi.get(cId),
+      ])
       setLocalMessages(result.messages)
       const files: OutputFile[] = []
       for (const msg of result.messages) { if (msg.tool_result) files.push(...extractFilesFromResult(msg.tool_result as Record<string, unknown>)) }
       setOutputFiles(prev => { const ex = new Set(prev.map(f => f.name)); const nf = files.filter(f => !ex.has(f.name)); return nf.length > 0 ? [...prev, ...nf] : prev })
       if (result.messages.length > 0) lastMsgIdRef.current = result.messages[result.messages.length - 1].id
-      const conv = conversations.find(c => c.id === cId)
-      if (conv?.status === 'processing') { setRecovering(true); startPolling(cId) }
+      if (convDetail.status === 'processing') { setRecovering(true); startPolling(cId) }
       else { setRecovering(false); stopPolling() }
     } catch { setLocalMessages([]) }
     finally { setLoadingMessages(false) }
-  }, [conversations, startPolling, stopPolling])
+  }, [startPolling, stopPolling])
 
   useEffect(() => { return () => stopPolling() }, [stopPolling])
 
   useEffect(() => {
     if (convId) { setActiveConversation(convId); setOutputFiles([]); lastMsgIdRef.current = 0; stopPolling(); loadMessages(convId) }
     else { setLocalMessages([]); setOutputFiles([]); setRecovering(false); stopPolling() }
-  }, [convId])
+  }, [convId, loadMessages, setActiveConversation, stopPolling])
 
   const handleNew = async () => { const nid = await createConversation(); if (nid) navigate(`/conversations/${nid}`) }
   const handleDelete = async (cid: number) => { await deleteConversation(cid); if (convId === cid) navigate('/conversations') }
@@ -160,7 +162,7 @@ export default function Conversations() {
                   <span className="text-xs text-blue-600">Agent 正在执行中，自动恢复连接...</span>
                 </div>
               )}
-              <ChatPanel convId={convId} messages={localMessages} onNewMessage={handleNewMsg} onToolResult={handleToolResult} onSendStart={() => fetchConversations(true)} />
+              <ChatPanel convId={convId} messages={localMessages} onNewMessage={handleNewMsg} onToolResult={handleToolResult} onSendStart={() => fetchConversations(true)} onCancel={() => { stopPolling(); setRecovering(false) }} />
             </>
           )
         ) : (

@@ -546,3 +546,77 @@ async def send_message_stream(
     )
 
 
+# ── 文件预览 ────────────────────────────────────────────────────
+
+@router.get("/{conv_id}/preview/{filename}", summary="预览会话产出文件")
+async def preview_conversation_file(
+    conv_id: int,
+    filename: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """通过会话 ID 预览输出文件（缩略图）。"""
+    from pathlib import Path
+    from fastapi.responses import FileResponse
+
+    conv = get_conversation(db, conv_id)
+    if not conv:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    if conv.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="无权访问此会话")
+
+    # 从该会话的 tool_result 消息中查找文件路径
+    messages = get_conversation_messages(db, conv_id, limit=200)
+    file_path = None
+    for msg in messages:
+        if not msg.tool_result or not isinstance(msg.tool_result, dict):
+            continue
+        # 检查 output_files 数组
+        for f in (msg.tool_result.get("output_files") or []):
+            if isinstance(f, dict) and f.get("name") == filename:
+                file_path = Path(f["path"])
+                break
+        if file_path:
+            break
+        # 检查单文件输出字段
+        for key in ["output_png", "output_tif", "output_gif", "output_html", "output_csv"]:
+            val = msg.tool_result.get(key)
+            if isinstance(val, str) and (val.endswith(filename) or val.split("/")[-1].split("\\")[-1] == filename):
+                file_path = Path(val)
+                break
+        if file_path:
+            break
+
+    if not file_path or not file_path.exists():
+        # 尝试在 workspace/outputs 目录中查找
+        outputs_dir = Path("workspace/outputs")
+        candidate = outputs_dir / filename
+        if candidate.exists():
+            file_path = candidate
+        else:
+            raise HTTPException(status_code=404, detail="文件不存在")
+
+    # 对于图片文件直接返回，对于 TIF 生成缩略图
+    if file_path.suffix.lower() in ('.png', '.jpg', '.jpeg', '.gif'):
+        return FileResponse(
+            path=str(file_path),
+            filename=filename,
+            media_type=f"image/{file_path.suffix[1:].replace('jpg', 'jpeg')}",
+        )
+
+    # TIF 等其他格式生成缩略图
+    from api.services.file_service import generate_thumbnail
+    thumbnail_path = generate_thumbnail(file_path)
+    if not thumbnail_path:
+        # 如果无法生成缩略图，返回原文件
+        return FileResponse(
+            path=str(file_path),
+            filename=filename,
+            media_type="application/octet-stream",
+        )
+
+    return FileResponse(
+        path=str(thumbnail_path),
+        filename=f"preview_{file_path.stem}.png",
+        media_type="image/png",
+    )

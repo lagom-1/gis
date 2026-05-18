@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { Loader2, AlertCircle } from 'lucide-react'
 import { MessageBubble } from './MessageBubble'
 import { ToolCallCard } from './ToolCallCard'
+import { getStepDescription } from '../../services/toolNames'
 import type { Message, ToolCall, ExecutionPhase } from '../../types/conversation'
 
 interface Props {
@@ -9,9 +10,13 @@ interface Props {
   toolCalls: ToolCall[]
   phase: ExecutionPhase
   answer: string
+  step?: number
+  maxSteps?: number
+  currentTool?: string
+  reason?: string
 }
 
-export function MessageList({ messages, toolCalls, phase, answer }: Props) {
+export function MessageList({ messages, toolCalls, phase, answer, step, maxSteps, currentTool, reason }: Props) {
   const endRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -24,12 +29,14 @@ export function MessageList({ messages, toolCalls, phase, answer }: Props) {
     <div className="space-y-1">
       {messages.map((msg) => {
         if (msg.role === 'tool_call' || msg.role === 'tool_result') {
+          const result = msg.tool_result as Record<string, unknown> | undefined
           const call: ToolCall = {
             tool: msg.tool_name || 'unknown',
             args: (msg.tool_args as Record<string, unknown>) || {},
-            result: (msg.tool_result as Record<string, unknown>) || undefined,
-            status: msg.role === 'tool_call' ? 'running' :
-              msg.tool_result && (msg.tool_result as Record<string, unknown>).success === false ? 'error' : 'success',
+            result: result || undefined,
+            status: msg.role === 'tool_result'
+              ? (result && result.success === false ? 'error' : 'success')
+              : 'success', // persisted tool_call messages are always completed
           }
           return <ToolCallCard key={`${msg.id}-${msg.role}`} call={call} />
         }
@@ -48,7 +55,9 @@ export function MessageList({ messages, toolCalls, phase, answer }: Props) {
             <div className="flex items-center gap-2">
               <Loader2 className="h-4 w-4 animate-spin text-amber-500" />
               <span className="text-sm text-amber-700 font-medium">
-                {phase === 'thinking' ? '正在分析任务...' : '正在执行工具...'}
+                {phase === 'thinking'
+                  ? '正在分析任务...'
+                  : getStepDescription(step || 0, maxSteps || 0, currentTool, reason)}
               </span>
             </div>
           </div>

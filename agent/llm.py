@@ -19,24 +19,44 @@ except Exception:
 
 
 def get_llm():
-    """获取 LLM 实例，优先 Tongyi，失败抛 RuntimeError"""
-    api_key = os.getenv("DASHSCOPE_API_KEY")
-    if not api_key:
-        raise RuntimeError("未配置 DASHSCOPE_API_KEY，LLM 客户端初始化失败")
+    """获取 LLM 实例，支持 DeepSeek / Tongyi，失败抛 RuntimeError"""
+    provider = os.getenv("LLM_PROVIDER", "tongyi").lower()
 
-    # 尝试 Tongyi
-    try:
-        from langchain_community.chat_models.tongyi import ChatTongyi
-        model = os.getenv("QWEN_MODEL", "qwen-plus")
-        temperature = float(os.getenv("QWEN_TEMPERATURE", "0.1"))
-        return ChatTongyi(
-            model=model,
-            api_key=api_key,
-            temperature=temperature,
-            streaming=False,
-        )
-    except Exception:
-        pass
+    # DeepSeek（OpenAI 兼容接口）
+    if provider in ("deepseek", "deepseek-v3", "deepseek-v4"):
+        api_key = os.getenv("DEEPSEEK_API_KEY")
+        if not api_key:
+            raise RuntimeError("未配置 DEEPSEEK_API_KEY")
+        try:
+            from langchain_openai import ChatOpenAI
+            model = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+            temperature = float(os.getenv("LLM_TEMPERATURE", "0.1"))
+            return ChatOpenAI(
+                model=model,
+                api_key=api_key,
+                base_url="https://api.deepseek.com",
+                temperature=temperature,
+            )
+        except Exception as e:
+            print(f"[LLM] DeepSeek 初始化失败: {e}")
+
+    # Tongyi（通义千问）
+    api_key = os.getenv("DASHSCOPE_API_KEY")
+    if api_key:
+        try:
+            from langchain_community.chat_models.tongyi import ChatTongyi
+            model = os.getenv("QWEN_MODEL", "qwen-plus")
+            temperature = float(os.getenv("LLM_TEMPERATURE", "0.1"))
+            return ChatTongyi(
+                model=model,
+                api_key=api_key,
+                temperature=temperature,
+                streaming=False,
+            )
+        except Exception:
+            pass
+
+    raise RuntimeError("LLM 客户端初始化失败：无可用的 LLM 提供商")
 
 
 def _try_parse_json(text: str) -> Optional[Dict[str, Any]]:

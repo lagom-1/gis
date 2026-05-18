@@ -32,6 +32,25 @@ class AgentLoop:
         self.guard = guard or SafetyGuard()
         self.max_steps = max_steps
 
+    def _correct_decision(self, decision: dict, history: list) -> dict:
+        """简化的决策校正：防止幂等工具重复调用，确保工作流顺序正确"""
+        if decision.get("type") != "tool_call":
+            return decision
+
+        tool = decision.get("tool")
+
+        # resolve_admin_region 已成功调用过，禁止再次调用
+        if tool == "resolve_admin_region":
+            for h in history:
+                if h.get("tool") == "resolve_admin_region" and h.get("result", {}).get("success"):
+                    region = self.runtime.last_region_name or "未知区域"
+                    return {
+                        "type": "final",
+                        "answer": f"行政区边界已解析完成（{region}），请使用已解析的研究区继续执行 GEE 数据下载或分析。",
+                    }
+
+        return decision
+
     def run(
         self,
         user_input: str,
@@ -106,6 +125,8 @@ class AgentLoop:
                 )
                 from agent.prompts.system import CONVERSATIONAL_SYSTEM_PROMPT
                 decision = self.llm.invoke_json(CONVERSATIONAL_SYSTEM_PROMPT, payload)
+                # ── 2.5 决策校正 ──
+                decision = self._correct_decision(decision, history)
             except Exception as exc:
                 final_answer = f"决策失败: {exc}"
                 emit("error", {"message": str(exc)})

@@ -43,6 +43,7 @@ export interface ToolCall {
   args: Record<string, unknown>
   result?: Record<string, unknown>
   status: 'pending' | 'running' | 'success' | 'error'
+  reason?: string
 }
 
 export interface ConversationCreateRequest {

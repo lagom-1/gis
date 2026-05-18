@@ -3,6 +3,7 @@ import { useConversation } from '../../hooks/useConversation'
 import { ChatInput } from './ChatInput'
 import { MessageList } from './MessageList'
 import { ExamplePrompts } from './ExamplePrompts'
+import { XCircle } from 'lucide-react'
 import type { Message, ToolCall } from '../../types/conversation'
 
 interface Props {
@@ -11,10 +12,11 @@ interface Props {
   onNewMessage: (msg: Message) => void
   onToolResult?: (call: ToolCall) => void
   onSendStart?: () => void
+  onCancel?: () => void
 }
 
-export function ChatPanel({ convId, messages, onNewMessage, onToolResult, onSendStart }: Props) {
-  const { phase, toolCalls, answer, send } = useConversation()
+export function ChatPanel({ convId, messages, onNewMessage, onToolResult, onSendStart, onCancel }: Props) {
+  const { phase, toolCalls, answer, send, abort } = useConversation()
   const prevPhaseRef = useRef(phase)
   const prevAnswerRef = useRef(answer)
   const prevToolCallsLenRef = useRef(0)
@@ -55,7 +57,13 @@ export function ChatPanel({ convId, messages, onNewMessage, onToolResult, onSend
     await send(convId, content)
   }, [convId, onNewMessage, onSendStart, send])
 
-  const statusDot = phase === 'thinking' || phase === 'executing' ? 'bg-amber-500 animate-pulse' :
+  const handleCancel = useCallback(() => {
+    abort()
+    onCancel?.()
+  }, [abort, onCancel])
+
+  const isRunning = phase === 'thinking' || phase === 'executing'
+  const statusDot = isRunning ? 'bg-amber-500 animate-pulse' :
     phase === 'done' ? 'bg-emerald-500' : phase === 'waiting_for_user' ? 'bg-amber-500' : 'bg-gray-300'
 
   const statusText = phase === 'thinking' ? '分析中' : phase === 'executing' ? '执行中' :
@@ -68,7 +76,18 @@ export function ChatPanel({ convId, messages, onNewMessage, onToolResult, onSend
           <div className={`w-2 h-2 rounded-full ${statusDot}`} />
           <span className="text-xs text-gray-500 font-medium">{statusText}</span>
         </div>
-        <span className="text-xs text-gray-400">{messages.length} 条消息</span>
+        <div className="flex items-center gap-2">
+          {isRunning && (
+            <button
+              onClick={handleCancel}
+              className="flex items-center gap-1 px-2.5 py-1 text-xs text-red-600 bg-red-50 hover:bg-red-100 rounded-lg transition-colors"
+            >
+              <XCircle className="h-3.5 w-3.5" />
+              取消
+            </button>
+          )}
+          <span className="text-xs text-gray-400">{messages.length} 条消息</span>
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto p-4">
@@ -78,11 +97,20 @@ export function ChatPanel({ convId, messages, onNewMessage, onToolResult, onSend
             <p className="text-sm text-gray-400">输入自然语言指令，自动完成遥感分析</p>
           </div>
         )}
-        <MessageList messages={messages} toolCalls={toolCalls} phase={phase} answer={answer} />
+        <MessageList
+          messages={messages}
+          toolCalls={toolCalls}
+          phase={phase}
+          answer={answer}
+          step={toolCalls.length > 0 ? toolCalls.filter(tc => tc.status !== 'running').length + 1 : 0}
+          maxSteps={undefined}
+          currentTool={toolCalls[toolCalls.length - 1]?.tool}
+          reason={toolCalls[toolCalls.length - 1]?.reason}
+        />
         <ExamplePrompts onSelect={handleSend} />
       </div>
 
-      <ChatInput onSend={handleSend} disabled={phase === 'thinking' || phase === 'executing'} />
+      <ChatInput onSend={handleSend} disabled={isRunning} />
     </div>
   )
 }

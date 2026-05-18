@@ -249,6 +249,7 @@ export const useAppStore = create<AppState>()(
               case 'step_start':
                 set({
                   streamingStatus: {
+                    ...s.streamingStatus,
                     phase: 'executing',
                     step: event.data.step as number,
                     maxSteps: event.data.max as number,
@@ -259,8 +260,8 @@ export const useAppStore = create<AppState>()(
               case 'tool_start':
                 set({
                   streamingStatus: {
+                    ...s.streamingStatus,
                     phase: 'executing',
-                    step: s.streamingStatus.step,
                     tool: event.data.tool as string,
                     reason: event.data.reason as string,
                   },

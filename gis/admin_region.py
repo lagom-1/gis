@@ -125,13 +125,27 @@ def _find_geojson_files() -> Tuple[Optional[str], Optional[str]]:
     返回 (city_geojson_path, county_geojson_path)
 
     搜索策略（按优先级）：
-    1. 项目 workspace 目录
-    2. 脚本所在目录及子目录
-    3. 常见用户目录
-    4. 全盘快速扫描（限制深度）
+    1. 项目 data/ 目录下的已知文件（最高优先级）
+    2. 项目 workspace 目录
+    3. 脚本所在目录及子目录
+    4. 常见用户目录
     """
     city_path = None
     county_path = None
+
+    # 优先检查项目 data/ 目录下的已知文件
+    project_root = Path(__file__).resolve().parent.parent  # opengis/
+    data_dir = project_root / "data"
+    known_city = data_dir / "中国_市.geojson"
+    known_county = data_dir / "中国_县.geojson"
+    if known_city.exists():
+        city_path = str(known_city)
+    if known_county.exists():
+        county_path = str(known_county)
+
+    # 如果已找到两个文件，直接返回
+    if city_path and county_path:
+        return city_path, county_path
 
     # 收集所有搜索根目录
     search_roots = _collect_search_roots()
