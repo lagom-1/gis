@@ -25,10 +25,18 @@ export function MessageList({ messages, toolCalls, phase, answer, step, maxSteps
 
   const isActive = phase === 'thinking' || phase === 'executing'
 
+  // 收集 SSE 实时工具名称，用于去重（SSE 工具调用和 API 持久化消息去重）
+  const liveToolNames = new Set(toolCalls.map(tc => tc.tool))
+
   return (
     <div className="space-y-1">
       {messages.map((msg) => {
         if (msg.role === 'tool_call' || msg.role === 'tool_result') {
+          // 如果 SSE 实时流中已有同名工具调用，跳过 API 持久化消息（避免重复显示）
+          const msgToolName = msg.tool_name || ''
+          if (msgToolName && liveToolNames.has(msgToolName)) {
+            return null
+          }
           const result = msg.tool_result as Record<string, unknown> | undefined
           const call: ToolCall = {
             tool: msg.tool_name || 'unknown',
@@ -36,7 +44,7 @@ export function MessageList({ messages, toolCalls, phase, answer, step, maxSteps
             result: result || undefined,
             status: msg.role === 'tool_result'
               ? (result && result.success === false ? 'error' : 'success')
-              : 'success', // persisted tool_call messages are always completed
+              : 'success',
           }
           return <ToolCallCard key={`${msg.id}-${msg.role}`} call={call} />
         }

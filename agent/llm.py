@@ -36,6 +36,8 @@ def get_llm():
                 api_key=api_key,
                 base_url="https://api.deepseek.com",
                 temperature=temperature,
+                request_timeout=120,  # 2分钟超时
+                max_retries=2,
             )
         except Exception as e:
             print(f"[LLM] DeepSeek 初始化失败: {e}")

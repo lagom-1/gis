@@ -866,6 +866,10 @@ class GISAgent:
                 if progress_callback:
                     progress_callback(step=step, tool="make_thematic_map")
 
+                # 样式更新+出图后立即结束，不给 LLM 重复调用的机会
+                final_answer = render_result.get("message", "地图样式已更新并重新出图。")
+                break
+
             # 失败时允许重试，仅在靠近 max_steps 且连续失败时终止
             if not result.get("success", False):
                 consecutive_failures = sum(1 for r in history[-3:] if not r.get("result", {}).get("success", True))

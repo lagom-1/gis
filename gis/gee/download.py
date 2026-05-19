@@ -41,6 +41,7 @@ def download_tif(
             "region": region_geom,
             "format": "GeoTIFF",
             "crs": crs,
+            "formatOptions": {"noData": -9999},
         })
 
         _ensure_parent(output_path)

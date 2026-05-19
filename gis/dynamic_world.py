@@ -125,6 +125,7 @@ def dynamic_world_landcover(
                 "region": ee_geom,
                 "format": "GeoTIFF",
                 "crs": "EPSG:4326",
+                "formatOptions": {"noData": -9999},
             })
             import urllib.request
             urllib.request.urlretrieve(url, output_tif)

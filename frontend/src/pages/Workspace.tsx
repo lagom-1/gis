@@ -3,6 +3,7 @@
  */
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useSessionState } from '../hooks/useSessionState'
 import {
   ChevronRight, ChevronDown, Trash2, FileImage, FileText,
   MessageSquare, Activity, Terminal, Sparkles, Image as ImageIcon,
@@ -263,9 +264,9 @@ export default function Workspace() {
   const navigate = useNavigate()
 
   // 状态
-  const [expandedConvId, setExpandedConvId] = useState<number | null>(null)
-  const [convMessages, setConvMessages] = useState<Record<number, any[]>>({})
-  const [previewFile, setPreviewFile] = useState<OutputFile | null>(null)
+  const [expandedConvId, setExpandedConvId] = useSessionState<number | null>('ws_expanded_conv', null)
+  const [convMessages, setConvMessages] = useSessionState<Record<number, any[]>>('ws_conv_msgs', {})
+  const [previewFile, setPreviewFile] = useSessionState<OutputFile | null>('ws_preview_file', null)
   const [fullscreenPreview, setFullscreenPreview] = useState(false)
 
   const {

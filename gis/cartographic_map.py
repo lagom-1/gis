@@ -256,27 +256,8 @@ def _draw_map_frame(panel_ax, map_rect: Sequence[float], frame: bool = True) -> 
     )
 
 
-def _draw_north_arrow(panel_ax, outer: Dict[str, float], position: str = "upper right", fontsize: int = 13,
-                      xoffset: float = 0.0, yoffset: float = 0.0) -> None:
-    cx, cy, ha, va = _anchor_in_outer(outer, position, pad_x=0.06, pad_y=0.07)
-    cx += xoffset
-    cy += yoffset
-    size = min(max(fontsize / 13.0, 0.8), 1.55)
-    panel_ax.add_patch(
-        FancyBboxPatch(
-            (cx - 0.03 * size if ha != "left" else cx, cy - 0.085 * size),
-            0.06 * size,
-            0.11 * size,
-            boxstyle="round,pad=0.006,rounding_size=0.005",
-            fc="white",
-            ec="#B9B9B9",
-            lw=0.8,
-            transform=panel_ax.transAxes,
-            zorder=5,
-            alpha=0.96,
-        )
-    )
-    x_mid = cx if ha == "center" else (cx - 0.0 if ha == "left" else cx)
+def _draw_north_classic(panel_ax, cx, cy, size, x_mid, ha, fontsize):
+    """经典：黑色实心三角 + 灰色倒三角"""
     north = Polygon(
         [(x_mid, cy + 0.02 * size), (x_mid - 0.012 * size, cy - 0.02 * size), (x_mid, cy - 0.002 * size), (x_mid + 0.012 * size, cy - 0.02 * size)],
         closed=True, transform=panel_ax.transAxes, fc="#111111", ec="#111111", lw=0.8, zorder=7,
@@ -293,6 +274,118 @@ def _draw_north_arrow(panel_ax, outer: Dict[str, float], position: str = "upper 
         fontsize=fontsize, fontweight="bold", color="#141414", zorder=8,
         fontproperties=_font(fontsize, "bold"),
     )
+
+
+def _draw_north_simple(panel_ax, cx, cy, size, x_mid, ha, fontsize):
+    """简洁：细线箭头"""
+    import matplotlib.patches as mpatches
+    arrow = mpatches.FancyArrow(
+        x_mid, cy - 0.04 * size, 0, 0.09 * size,
+        width=0.006 * size, head_width=0.028 * size, head_length=0.035 * size,
+        transform=panel_ax.transAxes, fc="#111111", ec="#111111", lw=0, zorder=7,
+    )
+    panel_ax.add_patch(arrow)
+    panel_ax.text(
+        x_mid, cy + 0.056 * size, "N",
+        transform=panel_ax.transAxes, ha="center", va="bottom",
+        fontsize=fontsize, fontweight="bold", color="#111111", zorder=8,
+        fontproperties=_font(fontsize, "bold"),
+    )
+
+
+def _draw_north_circle(panel_ax, cx, cy, size, x_mid, ha, fontsize):
+    """圆形：罗盘风格指北针"""
+    from matplotlib.patches import Wedge
+    # 外圆
+    circle = plt.Circle(
+        (x_mid, cy), 0.045 * size,
+        transform=panel_ax.transAxes, fc="white", ec="#555555", lw=1.2, zorder=6,
+    )
+    panel_ax.add_patch(circle)
+    # 上半填充 (北)
+    wedge_n = Wedge(
+        (x_mid, cy), 0.04 * size, 45, 135,
+        transform=panel_ax.transAxes, fc="#111111", ec="none", zorder=7,
+    )
+    panel_ax.add_patch(wedge_n)
+    # 下半 (南) — 灰色
+    wedge_s = Wedge(
+        (x_mid, cy), 0.04 * size, -135, -45,
+        transform=panel_ax.transAxes, fc="#D0D0D0", ec="none", zorder=7,
+    )
+    panel_ax.add_patch(wedge_s)
+    panel_ax.text(
+        x_mid, cy + 0.06 * size, "N",
+        transform=panel_ax.transAxes, ha="center", va="bottom",
+        fontsize=fontsize, fontweight="bold", color="#111111", zorder=8,
+        fontproperties=_font(fontsize, "bold"),
+    )
+
+
+def _draw_north_fancy(panel_ax, cx, cy, size, x_mid, ha, fontsize):
+    """花式：四角星形指北针"""
+    import numpy as np
+    # 主菱形
+    diamond = Polygon(
+        [(x_mid, cy + 0.04 * size), (x_mid + 0.018 * size, cy), (x_mid, cy - 0.04 * size), (x_mid - 0.018 * size, cy)],
+        closed=True, transform=panel_ax.transAxes, fc="#C62828", ec="#8B0000", lw=1.0, zorder=7,
+    )
+    panel_ax.add_patch(diamond)
+    # 上部尖角
+    top = Polygon(
+        [(x_mid, cy + 0.05 * size), (x_mid + 0.008 * size, cy + 0.02 * size), (x_mid - 0.008 * size, cy + 0.02 * size)],
+        closed=True, transform=panel_ax.transAxes, fc="#C62828", ec="#8B0000", lw=0.8, zorder=8,
+    )
+    panel_ax.add_patch(top)
+    # 小圆中心
+    center_dot = plt.Circle(
+        (x_mid, cy), 0.006 * size,
+        transform=panel_ax.transAxes, fc="white", ec="none", zorder=9,
+    )
+    panel_ax.add_patch(center_dot)
+    panel_ax.text(
+        x_mid, cy + 0.064 * size, "N",
+        transform=panel_ax.transAxes, ha="center", va="bottom",
+        fontsize=fontsize, fontweight="bold", color="#C62828", zorder=10,
+        fontproperties=_font(fontsize, "bold"),
+    )
+
+
+_NORTH_STYLES = {
+    "classic": _draw_north_classic,
+    "simple": _draw_north_simple,
+    "circle": _draw_north_circle,
+    "fancy": _draw_north_fancy,
+}
+
+
+def _draw_north_arrow(panel_ax, outer: Dict[str, float], position: str = "upper right", fontsize: int = 13,
+                      xoffset: float = 0.0, yoffset: float = 0.0, north_style: str = "classic") -> None:
+    cx, cy, ha, va = _anchor_in_outer(outer, position, pad_x=0.06, pad_y=0.07)
+    cx += xoffset
+    cy += yoffset
+    size = min(max(fontsize / 13.0, 0.8), 1.55)
+
+    # 背景框
+    panel_ax.add_patch(
+        FancyBboxPatch(
+            (cx - 0.03 * size if ha != "left" else cx, cy - 0.085 * size),
+            0.06 * size,
+            0.11 * size,
+            boxstyle="round,pad=0.006,rounding_size=0.005",
+            fc="white",
+            ec="#B9B9B9",
+            lw=0.8,
+            transform=panel_ax.transAxes,
+            zorder=5,
+            alpha=0.96,
+        )
+    )
+    x_mid = cx if ha == "center" else (cx - 0.0 if ha == "left" else cx)
+
+    style_name = str(north_style or "classic").strip().lower()
+    draw_fn = _NORTH_STYLES.get(style_name, _draw_north_classic)
+    draw_fn(panel_ax, cx, cy, size, x_mid, ha, fontsize)
 
 
 def _draw_scalebar(panel_ax, outer: Dict[str, float], extent, transform, crs,
@@ -410,6 +503,7 @@ def generate_cartographic_map(
     scalebar_length_ratio: float = 0.16,
     north_position: str = "upper right",
     north_fontsize: int = 13,
+    north_style: str = "classic",
     title_fontsize: int = 18,
     annotation_items: Optional[Sequence[Dict]] = None,
     map_margin: float = 0.035,
@@ -434,6 +528,12 @@ def generate_cartographic_map(
 
         if nodata is not None:
             data = np.where(data == nodata, np.nan, data)
+        else:
+            # 防御性回退：GEE 的 getDownloadURL 不一定可靠写入 GDAL NoData 标签
+            # 极端负值（如 -9999）在没有 NoData 标签时应视为掩码值
+            extreme_negative = data < -9000
+            if extreme_negative.any():
+                data = np.where(extreme_negative, np.nan, data)
         data = np.where(np.isfinite(data), data, np.nan)
 
         if crop_bounds and len(crop_bounds) == 4:
@@ -529,7 +629,7 @@ def generate_cartographic_map(
         if show_scalebar:
             scalebar_label = _draw_scalebar(panel_ax, outer, extent, transform, crs, scalebar_position, scalebar_fontsize, scalebar_length_ratio, scalebar_xoffset, scalebar_yoffset)
         if show_north:
-            _draw_north_arrow(panel_ax, outer, north_position, north_fontsize, north_xoffset, north_yoffset)
+            _draw_north_arrow(panel_ax, outer, north_position, north_fontsize, north_xoffset, north_yoffset, north_style)
 
         footer_parts = []
         if crs is not None:

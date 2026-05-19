@@ -431,7 +431,18 @@ async def send_message_stream(
         current_tool_args = {}
 
         # 轮询事件直到完成，同时增量保存工具结果到 DB
+        # 不设硬性超时——Agent 自身有 max_steps 和循环检测保护
+        should_break = False
+        import time
+        last_heartbeat = time.time()
+
         while not future.done() or events:
+            # 每 30 秒发送心跳，保持 SSE 连接活跃
+            now = time.time()
+            if now - last_heartbeat > 30:
+                last_heartbeat = now
+                yield f": heartbeat\n\n"
+
             with lock:
                 batch = list(events)
                 events.clear()
@@ -472,14 +483,50 @@ async def send_message_stream(
                 elif event_type == "error":
                     error_occurred = True
                     error_message = str(data.get("message", ""))
+                    should_break = True
                     break
                 elif event_type in ("final_answer", "ask_user", "done"):
+                    should_break = True
                     break
+
+            if should_break:
+                break
             if batch:
                 continue
             await asyncio.sleep(0.2)
 
         executor.shutdown(wait=False)
+
+        # ── 智能补齐：如果 TIF 已下载但未生成专题图，自动生成 ──
+        tif_path = runtime.current_tif()
+        has_map = any(h.get("tool") == "make_thematic_map" for h in tool_history)
+        if tif_path and not has_map:
+            try:
+                logger.info(f"自动生成专题图: {tif_path}")
+                from gis.cartographic_map import generate_cartographic_map
+                from pathlib import Path
+                region_name = runtime.last_region_name or "研究区"
+                stem = Path(tif_path).stem
+                map_path = str(Path(tif_path).parent / f"{stem}_map.png")
+                map_result = generate_cartographic_map(
+                    tif_path=tif_path,
+                    output_path=map_path,
+                    title=f"地表温度 - {region_name}",
+                    colormap="coolwarm",
+                )
+                if map_result.get("success"):
+                    runtime.last_output = map_result.get("output_png")
+                    # 追加到 tool_history 供后续保存
+                    tool_history.append({
+                        "step": len(tool_history) + 1,
+                        "tool": "make_thematic_map",
+                        "args": {},
+                        "reason": "超时/出错后自动生成专题图",
+                        "result": map_result,
+                    })
+                    logger.info(f"专题图已自动生成: {map_result.get('output_png')}")
+            except Exception as e:
+                logger.error(f"自动生成专题图失败: {e}")
 
         # 保存尚未保存的工具调用（兜底）
         for i, h in enumerate(tool_history):

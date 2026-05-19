@@ -142,6 +142,7 @@ def ee_unsupervised_classify(
             url = result.getDownloadURL({
                 "scale": scale, "region": ee_geom,
                 "format": "GeoTIFF", "crs": "EPSG:4326",
+                "formatOptions": {"noData": -9999},
             })
             import urllib.request
             urllib.request.urlretrieve(url, output_tif)
@@ -361,6 +362,7 @@ def ee_supervised_classify(
             url = result.getDownloadURL({
                 "scale": scale, "region": ee_geom,
                 "format": "GeoTIFF", "crs": "EPSG:4326",
+                "formatOptions": {"noData": -9999},
             })
             import urllib.request
             urllib.request.urlretrieve(url, output_tif)

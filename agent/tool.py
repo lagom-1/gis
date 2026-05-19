@@ -368,6 +368,8 @@ def register_tools(registry: ToolRegistry, runtime: GISRuntime, preferences: Dic
             cloud_pct=float(args.get("cloud_pct", 30)),
             project_id=args.get("project_id"),
             download_timeout=int(args.get("download_timeout", 1800)),
+            drive_folder=args.get("drive_folder") or GEE_DRIVE_FOLDER,
+            local_drive_path=args.get("local_drive_path") or str(GDRIVE_SYNC_DIR),
         )
 
         if result.get("success") and result.get("output_tif") and os.path.exists(result["output_tif"]):
@@ -1323,7 +1325,17 @@ def register_tools(registry: ToolRegistry, runtime: GISRuntime, preferences: Dic
         style = dict(runtime.map_style)
         style.update({k: v for k, v in args.items() if v is not None})
         title = style.get("title") or f"专题图 - {_safe_stem(tif)}"
-        output_path = args.get("output_path") or str(out_dir() / f"{_safe_stem(tif)}_map.png")
+        # 生成唯一文件名：基础名 + 样式后缀，已存在则加序号
+        _stem = _safe_stem(tif)
+        _ns = style.get("north_style", "")
+        _style_tag = f"_{_ns}" if _ns and _ns != "classic" else ""
+        _base = str(out_dir() / f"{_stem}_map{_style_tag}")
+        _output_path = f"{_base}.png"
+        _counter = 1
+        while os.path.exists(_output_path):
+            _counter += 1
+            _output_path = f"{_base}_{_counter}.png"
+        output_path = args.get("output_path") or _output_path
         result = generate_cartographic_map(
             tif_path=tif,
             output_path=output_path,
@@ -1348,6 +1360,7 @@ def register_tools(registry: ToolRegistry, runtime: GISRuntime, preferences: Dic
             scalebar_fontsize=int(style.get("scalebar_fontsize", 10)),
             scalebar_length_ratio=float(style.get("scalebar_length_ratio", 0.16)),
             north_fontsize=int(style.get("north_fontsize", 13)),
+            north_style=style.get("north_style", "classic"),
             title_fontsize=int(style.get("title_fontsize", 18)),
             map_margin=float(style.get("map_margin", 0.035)),
             map_frame_scale=float(style.get("map_frame_scale", 0.94)),
@@ -1751,13 +1764,13 @@ def register_tools(registry: ToolRegistry, runtime: GISRuntime, preferences: Dic
         ("enhance_raster", "对当前栅格做增强或去噪（高斯/中值/直方图均衡/锐化）。", {"method": "gaussian/median/histogram_eq/clahe/sharpen", "kernel_size": "核大小"}, "analysis"),
         ("profile_analysis", "对当前栅格做剖面分析。", {"start": "起点[col,row]", "end": "终点[col,row]"}, "analysis"),
 
-        ("make_thematic_map", "将当前单波段结果做成标准专题图（含图例、比例尺、指北针）。", {"title": "标题", "colormap": "配色", "legend_position": "图例位置", "dpi": "分辨率"}, "visualization"),
+        ("make_thematic_map", "将当前单波段结果做成标准专题图（含图例、比例尺、指北针）。", {"title": "标题", "colormap": "配色", "legend_position": "图例位置", "dpi": "分辨率", "north_style": "指北针样式(classic/simple/circle/fancy)"}, "visualization"),
         ("view_3d", "将当前单波段栅格生成 3D 可视化。", {"elevation": "俯仰角", "azimuth": "方位角"}, "visualization"),
         ("compare_views", "对比原始图和当前结果图。", {"mode": "side_by_side 或 difference"}, "visualization"),
         ("transform_raster", "对当前栅格做翻转或旋转。", {"operation": "flip_h/flip_v/rotate_90/rotate_180/rotate_270"}, "visualization"),
 
         ("export_result", "把最近结果图导出为 png/jpg/pdf/tif。", {"format": "png/jpg/pdf/tif"}, "export"),
-        ("set_map_style", "更新地图样式参数。绝对位置用 legend_position/scalebar_position/north_position，微调偏移用 legend_xoffset/yoffset、north_xoffset/yoffset、scalebar_xoffset/yoffset。", {"title": "标题", "colormap": "配色", "legend_position": "绝对位置"}, "system"),
+        ("set_map_style", "更新地图样式参数。绝对位置用 legend_position/scalebar_position/north_position，微调偏移用 legend_xoffset/yoffset、north_xoffset/yoffset、scalebar_xoffset/yoffset。指北针样式用 north_style: classic/simple/circle/fancy。", {"title": "标题", "colormap": "配色", "legend_position": "绝对位置", "north_style": "指北针样式(classic/simple/circle/fancy)"}, "system"),
         ("update_preferences", "更新长期用户偏好（默认导出格式、分类数、配色等）。", {"export_format": "导出格式", "n_classes": "默认分类数"}, "system"),
         ("summarize_context", "返回当前会话上下文摘要。", {}, "system"),
         ("generate_report", "生成带文字解读的图文实验报告（HTML格式）。", {"title": "报告标题", "subtitle": "副标题", "conclusion": "总结文字", "format": "html或pdf", "images": "可选，指定要包含的图片路径列表"}, "export"),

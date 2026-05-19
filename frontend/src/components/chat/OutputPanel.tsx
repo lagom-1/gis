@@ -38,10 +38,19 @@ function FileIcon({ cat }: { cat: string }) {
   }
 }
 
+const OUTPUT_COLLAPSED_KEY = 'opengis_output_panel_collapsed'
+
 export function OutputPanel({ files, onFileClick }: Props) {
   const [preview, setPreview] = useState<OutputFile | null>(null)
-  const [collapsed, setCollapsed] = useState(false)
+  const [collapsed, setCollapsed] = useState(() => {
+    try { return localStorage.getItem(OUTPUT_COLLAPSED_KEY) === 'true' } catch { return false }
+  })
   const [lightbox, setLightbox] = useState(false)
+
+  const toggleCollapsed = (v: boolean) => {
+    setCollapsed(v)
+    try { localStorage.setItem(OUTPUT_COLLAPSED_KEY, String(v)) } catch {}
+  }
 
   useEffect(() => {
     if (files.length > 0 && !preview) {
@@ -51,12 +60,18 @@ export function OutputPanel({ files, onFileClick }: Props) {
   }, [files])
 
   const active = preview || (files.length > 0 ? files[0] : null)
-  const getUrl = (f: OutputFile) => `/outputs/${encodeURIComponent(f.name)}`
+  const getUrl = (f: OutputFile) => {
+    // 从完整路径中提取 outputs/ 之后的相对路径
+    const p = (f.path || f.name).replace(/\\/g, '/')
+    const idx = p.lastIndexOf('/outputs/')
+    const rel = idx >= 0 ? p.slice(idx + 1) : `outputs/${f.name}`
+    return '/' + rel.split('/').map(encodeURIComponent).join('/')
+  }
 
   if (collapsed) {
     return (
       <div className="w-11 flex-shrink-0 border-l border-gray-200 bg-white flex flex-col items-center pt-4 gap-3">
-        <button onClick={() => setCollapsed(false)} className="p-1.5 text-gray-400 hover:text-gray-600" title="展开">
+        <button onClick={() => toggleCollapsed(false)} className="p-1.5 text-gray-400 hover:text-gray-600" title="展开">
           <PanelRight className="h-4 w-4" />
         </button>
         {files.length > 0 && <span className="text-xs font-semibold text-blue-500">{files.length}</span>}
@@ -80,7 +95,7 @@ export function OutputPanel({ files, onFileClick }: Props) {
                 <Maximize2 className="h-3.5 w-3.5" />
               </button>
             )}
-            <button onClick={() => setCollapsed(true)} className="p-1.5 text-gray-400 hover:text-gray-600 rounded" title="折叠">
+            <button onClick={() => toggleCollapsed(true)} className="p-1.5 text-gray-400 hover:text-gray-600 rounded" title="折叠">
               <PanelRightClose className="h-3.5 w-3.5" />
             </button>
           </div>

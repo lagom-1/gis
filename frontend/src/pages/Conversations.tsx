@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { Plus, Trash2, MessageSquare, Loader2, Activity } from 'lucide-react'
 import { useAppStore } from '../stores/appStore'
+import { useSessionState } from '../hooks/useSessionState'
 import { conversationsApi } from '../api/conversations'
 import { ChatPanel } from '../components/chat/ChatPanel'
 import { OutputPanel } from '../components/chat/OutputPanel'
@@ -44,8 +45,10 @@ export default function Conversations() {
   const convId = id ? parseInt(id) : null
 
   const { conversations, isLoadingConversations, fetchConversations, createConversation, deleteConversation, setActiveConversation } = useAppStore()
-  const [localMessages, setLocalMessages] = useState<Message[]>([])
-  const [outputFiles, setOutputFiles] = useState<OutputFile[]>([])
+  // 使用 sessionStorage 持久化，切换页面后状态不丢失
+  const sessionKey = convId ? `conv_${convId}` : null
+  const [localMessages, setLocalMessages] = useSessionState<Message[]>(sessionKey ? `${sessionKey}_msgs` : 'conv_null_msgs', [])
+  const [outputFiles, setOutputFiles] = useSessionState<OutputFile[]>(sessionKey ? `${sessionKey}_files` : 'conv_null_files', [])
   const [loadingMessages, setLoadingMessages] = useState(false)
   const [recovering, setRecovering] = useState(false)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -100,8 +103,16 @@ export default function Conversations() {
   useEffect(() => { return () => stopPolling() }, [stopPolling])
 
   useEffect(() => {
-    if (convId) { setActiveConversation(convId); setOutputFiles([]); lastMsgIdRef.current = 0; stopPolling(); loadMessages(convId) }
-    else { setLocalMessages([]); setOutputFiles([]); setRecovering(false); stopPolling() }
+    if (convId) {
+      setActiveConversation(convId)
+      lastMsgIdRef.current = 0
+      stopPolling()
+      loadMessages(convId)
+    } else {
+      // 切换到列表页时不强制清空——数据由 sessionStorage 保留，返回时恢复
+      setRecovering(false)
+      stopPolling()
+    }
   }, [convId, loadMessages, setActiveConversation, stopPolling])
 
   const handleNew = async () => { const nid = await createConversation(); if (nid) navigate(`/conversations/${nid}`) }
@@ -177,7 +188,13 @@ export default function Conversations() {
       </div>
 
       {/* 输出面板 */}
-      <OutputPanel files={outputFiles} onFileClick={(f) => window.open(`/outputs/${encodeURIComponent(f.name)}`, '_blank')} />
+      <OutputPanel files={outputFiles} onFileClick={(f) => {
+        const p = (f.path || f.name).replace(/\\/g, '/')
+        const idx = p.lastIndexOf('/outputs/')
+        const rel = idx >= 0 ? p.slice(idx + 1) : `outputs/${f.name}`
+        const url = '/' + rel.split('/').map(encodeURIComponent).join('/')
+        window.open(url, '_blank')
+      }} />
     </div>
   )
 }

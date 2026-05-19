@@ -19,6 +19,28 @@ def _ensure_parent(path: str) -> None:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
 
 
+def _safe_replace(src: str, dst: str) -> None:
+    """安全替换文件，兼容 Windows 文件锁定问题。"""
+    # 先尝试 os.replace
+    try:
+        os.replace(src, dst)
+        return
+    except OSError:
+        pass
+    # 失败则先删除目标再重命名
+    try:
+        if os.path.exists(dst):
+            os.remove(dst)
+        os.rename(src, dst)
+    except OSError:
+        # 最后回退到复制+删除
+        shutil.copy2(src, dst)
+        try:
+            os.remove(src)
+        except OSError:
+            pass
+
+
 def _save_preview_png(tif_path: str) -> str:
     """从单波段 TIF 生成同名 PNG 预览图，返回 png 路径"""
     import numpy as np
@@ -57,6 +79,54 @@ def _save_preview_png(tif_path: str) -> str:
         return png_path
     except Exception:
         return ""
+
+
+def _mask_tif_to_geojson(tif_path: str, geojson_geometry: Dict[str, Any]) -> None:
+    """
+    用 GeoJSON 几何精确掩码 TIF，将几何外部的像素设为 NoData=-9999。
+
+    解决 GEE 的 getDownloadURL 不可靠地处理 .clip() 掩码的问题。
+    geojson_geometry 应为纯 geometry dict: {"type": "Polygon", "coordinates": [...]}
+    或 {"type": "MultiPolygon", "coordinates": [...]}
+    """
+    import numpy as np
+    import rasterio
+    from rasterio.features import geometry_mask
+
+    # 从 GeoJSON 几何中提取 shapely geometry 列表
+    gtype = geojson_geometry.get("type", "")
+    if gtype == "Feature":
+        inner = geojson_geometry.get("geometry")
+        if inner:
+            geojson_geometry = inner
+        gtype = geojson_geometry.get("type", "")
+
+    shapes = []
+    if gtype == "Polygon":
+        shapes = [geojson_geometry]
+    elif gtype == "MultiPolygon":
+        shapes = [{"type": "Polygon", "coordinates": coords}
+                  for coords in geojson_geometry["coordinates"]]
+    else:
+        return  # 不支持的类型，跳过掩码
+
+    with rasterio.open(tif_path, "r+") as src:
+        data = src.read(1).astype("float32")
+
+        # 创建布尔掩码：True = 应被掩码的像素（几何外部）
+        mask = geometry_mask(
+            shapes,
+            out_shape=(src.height, src.width),
+            transform=src.transform,
+            invert=False,
+        )
+
+        data[mask] = -9999.0
+        src.nodata = -9999.0
+        src.update_tags(nodata=-9999.0)
+
+        # 写入掩码后的数据
+        src.write(data.astype(src.dtypes[0]), 1)
 
 
 def _load_geojson(path: str) -> Dict[str, Any]:
@@ -266,8 +336,9 @@ def _download_direct(
     scale: int,
     output_tif: str,
     timeout_sec: int = 300,
+    geojson_geom: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """先尝试 GEE 直接下载（适合小区域）。太大则回退 Drive。"""
+    """先尝试 GEE 直接下载（适合小区域）。太大则回退 Drive。下载完成后用 geojson_geom 精确掩码。"""
     try:
         size_info = _estimate_download_size(geom, scale)
         if size_info and size_info["size_mb"] > 45:
@@ -284,6 +355,7 @@ def _download_direct(
             "region": geom,
             "format": "GeoTIFF",
             "crs": "EPSG:4326",
+            "formatOptions": {"noData": -9999},
         })
 
         _ensure_parent(output_tif)
@@ -313,9 +385,17 @@ def _download_direct(
             if total_bytes:
                 print(f"\r[GEE] 下载中 |{'█' * 20}| 100%", flush=True)
 
-        os.replace(tmp_path, output_tif)
+        # 安全替换：Windows 上 os.replace 可能因文件锁定而失败
+        _safe_replace(tmp_path, output_tif)
         file_size = os.path.getsize(output_tif) / (1024 * 1024)
         print(f"[GEE] 直接下载完成: {output_tif} ({file_size:.1f}MB)")
+
+        # 用 GeoJSON 几何精确掩码（解决 GEE downloadURL 掩码不可靠问题）
+        if geojson_geom:
+            try:
+                _mask_tif_to_geojson(output_tif, geojson_geom)
+            except Exception as e:
+                print(f"[GEE] 几何掩码失败（TIF 已保留）: {e}")
 
         return {
             "success": True,
@@ -358,7 +438,7 @@ def _wait_drive_file(
         crs="EPSG:4326",
         maxPixels=1e13,
         fileFormat="GeoTIFF",
-        formatOptions={"noData": 0},
+        formatOptions={"noData": -9999},
     )
     task.start()
     task_id = task.id
@@ -394,7 +474,7 @@ def _export_to_drive(export_img: ee.Image, task_name: str, folder: str, scale: i
         crs="EPSG:4326",
         maxPixels=1e13,
         fileFormat="GeoTIFF",
-        formatOptions={"noData": 0},
+        formatOptions={"noData": -9999},
     )
     task.start()
     return task
@@ -541,6 +621,8 @@ def gee_compute_lst(
     cloud_pct: float = 30,
     project_id: Optional[str] = None,
     download_timeout: int = 900,
+    drive_folder: str = "",
+    local_drive_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     在 GEE 云端直接进行 LST 反演，只下载单波段 LST (°C) TIF。
@@ -560,6 +642,15 @@ def gee_compute_lst(
         return init_result
 
     try:
+        # 保存原始 GeoJSON 几何用于后续精确掩码
+        _geojson_geom = None
+        if isinstance(region, dict):
+            gtype = region.get("type", "")
+            if gtype == "Feature":
+                _geojson_geom = region.get("geometry")
+            elif gtype in ("Polygon", "MultiPolygon"):
+                _geojson_geom = region
+
         geom = _normalize_region(region=region, region_path=region_path)
     except Exception as e:
         return {"success": False, "message": f"AOI 解析失败: {e}"}
@@ -618,39 +709,85 @@ def gee_compute_lst(
             bestEffort=True,
         ).getInfo()
 
-        # HTTP 直接下载
+        # ── 下载：小区域直接下载，大区域走 Drive 导出 ──
         print(f"[GEE LST] 云端反演完成，共 {count} 景影像 → 中值合成，正在下载...")
-        url = lst_img.getDownloadURL({
-            "scale": scale,
-            "region": geom,
-            "format": "GeoTIFF",
-            "crs": "EPSG:4326",
-        })
+        folder_name = (drive_folder or GEE_DRIVE_FOLDER).strip() or GEE_DRIVE_FOLDER
+        sync_dir = local_drive_path or str(GDRIVE_SYNC_DIR)
 
-        _ensure_parent(output_tif)
-        tmp_path = output_tif + ".downloading"
+        size_info = _estimate_download_size(geom, scale)
+        use_drive = size_info and size_info["size_mb"] > 45
 
-        req = urllib.request.Request(url)
-        with urllib.request.urlopen(req, timeout=download_timeout) as resp:
-            content_length = resp.headers.get("Content-Length")
-            total_bytes = int(content_length) if content_length else None
-            downloaded = 0
-            with open(tmp_path, "wb") as f:
-                while True:
-                    chunk = resp.read(8192)
-                    if not chunk:
-                        break
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    if total_bytes:
-                        pct = int(downloaded * 100 / total_bytes)
-                        bar = "█" * (pct // 5) + "░" * (20 - pct // 5)
-                        print(f"\r[GEE LST] 下载中 |{bar}| {pct}%", end="", flush=True)
-            if total_bytes:
-                print(f"\r[GEE LST] 下载中 |{'█' * 20}| 100%", flush=True)
-
-        os.replace(tmp_path, output_tif)
-        file_size = os.path.getsize(output_tif) / (1024 * 1024)
+        if use_drive:
+            print(f"[GEE LST] 区域较大（约 {size_info['size_mb']}MB），走 Drive 导出...")
+            import time as _time
+            _ts = int(_time.time()) % 100000
+            task_name = f"gee_lst_{start_date.replace('-', '')}_{end_date.replace('-', '')}_{_ts}"
+            drive_path = _wait_drive_file(
+                export_img=lst_img,
+                task_name=task_name,
+                folder=folder_name,
+                scale=int(scale),
+                geom=geom,
+                sync_dir=sync_dir,
+                timeout_sec=int(download_timeout),
+            )
+            if drive_path:
+                _ensure_parent(output_tif)
+                shutil.copy2(drive_path, output_tif)
+                file_size = os.path.getsize(output_tif) / (1024 * 1024)
+                print(f"[GEE LST] Drive 导出完成: {output_tif} ({file_size:.1f}MB)")
+            else:
+                return {
+                    "success": False,
+                    "message": f"GEE LST 已导出到 Google Drive，但本地同步目录未找到文件（请确认 {sync_dir} 已同步）",
+                }
+        else:
+            # 直接下载（小区域）
+            direct_result = _download_direct(
+                export_img=lst_img.rename("LST"),
+                geom=geom,
+                scale=int(scale),
+                output_tif=output_tif,
+                timeout_sec=min(int(download_timeout), 300),
+                geojson_geom=_geojson_geom,
+            )
+            if direct_result.get("success"):
+                file_size = os.path.getsize(output_tif) / (1024 * 1024)
+                # _download_direct 内部已调用 _mask_tif_to_geojson
+            elif direct_result.get("too_large"):
+                # 直接下载回退到 Drive
+                print(f"[GEE LST] 直接下载失败（{direct_result.get('message')}），回退 Drive 导出...")
+                import time as _time
+                _ts = int(_time.time()) % 100000
+                task_name = f"gee_lst_{start_date.replace('-', '')}_{end_date.replace('-', '')}_{_ts}"
+                drive_path = _wait_drive_file(
+                    export_img=lst_img,
+                    task_name=task_name,
+                    folder=folder_name,
+                    scale=int(scale),
+                    geom=geom,
+                    sync_dir=sync_dir,
+                    timeout_sec=int(download_timeout),
+                )
+                if drive_path:
+                    _ensure_parent(output_tif)
+                    shutil.copy2(drive_path, output_tif)
+                    file_size = os.path.getsize(output_tif) / (1024 * 1024)
+                    print(f"[GEE LST] Drive 导出完成: {output_tif} ({file_size:.1f}MB)")
+                    # 对 Drive 导出的文件也应用几何掩码
+                    if _geojson_geom:
+                        try:
+                            _mask_tif_to_geojson(output_tif, _geojson_geom)
+                        except Exception as e:
+                            print(f"[GEE LST] 几何掩码失败（TIF 已保留）: {e}")
+                else:
+                    return {
+                        "success": False,
+                        "message": direct_result.get("message", "下载失败且 Drive 回退也失败"),
+                    }
+            else:
+                return direct_result
+            file_size = os.path.getsize(output_tif) / (1024 * 1024)
 
         lst_min = round(stats.get("LST_min", 0), 1)
         lst_max = round(stats.get("LST_max", 0), 1)
@@ -707,6 +844,15 @@ def gee_download_landsat_sca(
         return init_result
 
     try:
+        # 保存原始 GeoJSON 几何用于后续精确掩码
+        _geojson_geom = None
+        if isinstance(region, dict):
+            gtype = region.get("type", "")
+            if gtype == "Feature":
+                _geojson_geom = region.get("geometry")
+            elif gtype in ("Polygon", "MultiPolygon"):
+                _geojson_geom = region
+
         try:
             geom = _normalize_region(region=region, region_path=region_path)
         except Exception as e:
@@ -781,6 +927,7 @@ def gee_download_landsat_sca(
             scale=int(scale),
             output_tif=output_tif,
             timeout_sec=min(int(download_timeout), 300),
+            geojson_geom=_geojson_geom,
         )
 
         if direct_result.get("success"):
@@ -900,6 +1047,15 @@ def gee_download_monthly_lst(
         return init_result
 
     try:
+        # 保存原始 GeoJSON 几何用于后续精确掩码
+        _geojson_geom = None
+        if isinstance(region, dict):
+            gtype = region.get("type", "")
+            if gtype == "Feature":
+                _geojson_geom = region.get("geometry")
+            elif gtype in ("Polygon", "MultiPolygon"):
+                _geojson_geom = region
+
         try:
             geom = _normalize_region(region=region, region_path=region_path)
         except Exception as e:
@@ -1042,6 +1198,7 @@ def gee_download_monthly_lst(
             scale=int(scale),
             output_tif=output_tif,
             timeout_sec=min(int(download_timeout), 300),
+            geojson_geom=_geojson_geom,
         )
 
         result_base = {
@@ -1134,6 +1291,15 @@ def gee_download_yearly_lst(
         return init_result
 
     try:
+        # 保存原始 GeoJSON 几何用于后续精确掩码
+        _geojson_geom = None
+        if isinstance(region, dict):
+            gtype = region.get("type", "")
+            if gtype == "Feature":
+                _geojson_geom = region.get("geometry")
+            elif gtype in ("Polygon", "MultiPolygon"):
+                _geojson_geom = region
+
         try:
             geom = _normalize_region(region=region, region_path=region_path)
         except Exception as e:
@@ -1267,6 +1433,7 @@ def gee_download_yearly_lst(
                     scale=int(scale),
                     output_tif=output_tif,
                     timeout_sec=min(int(download_timeout), 300),
+                    geojson_geom=_geojson_geom,
                 )
 
                 if direct_result.get("success"):
@@ -1373,6 +1540,15 @@ def gee_download_multi_year_lst(
         return init_result
 
     try:
+        # 保存原始 GeoJSON 几何用于后续精确掩码
+        _geojson_geom = None
+        if isinstance(region, dict):
+            gtype = region.get("type", "")
+            if gtype == "Feature":
+                _geojson_geom = region.get("geometry")
+            elif gtype in ("Polygon", "MultiPolygon"):
+                _geojson_geom = region
+
         try:
             geom = _normalize_region(region=region, region_path=region_path)
         except Exception as e:
@@ -1497,6 +1673,7 @@ def gee_download_multi_year_lst(
                     scale=int(scale),
                     output_tif=output_tif,
                     timeout_sec=min(int(download_timeout), 300),
+                    geojson_geom=_geojson_geom,
                 )
 
                 if direct_result.get("success"):

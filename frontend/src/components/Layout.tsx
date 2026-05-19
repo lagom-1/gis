@@ -1,14 +1,16 @@
 import { Link, Outlet, useLocation } from 'react-router-dom'
 import { Map, MessageSquare, Terminal } from 'lucide-react'
+import { useAppStore } from '../stores/appStore'
 
-const navItems = [
+const STATIC_NAV = [
   { to: '/workspace', label: '工作空间', icon: Terminal },
-  { to: '/conversations', label: '对话', icon: MessageSquare },
 ]
 
 export default function Layout() {
   const location = useLocation()
   const isFullHeight = location.pathname.startsWith('/workspace') || location.pathname.startsWith('/conversations')
+  const activeConversationId = useAppStore(s => s.activeConversationId)
+  const convTo = activeConversationId ? `/conversations/${activeConversationId}` : '/conversations'
 
   return (
     <div className="min-h-screen bg-stone-50">
@@ -23,7 +25,7 @@ export default function Layout() {
                 <span className="text-sm font-bold text-stone-800">OpenGIS</span>
               </Link>
               <div className="flex items-center gap-1">
-                {navItems.map(({ to, label, icon: Icon }) => {
+                {STATIC_NAV.map(({ to, label, icon: Icon }) => {
                   const active = location.pathname.startsWith(to)
                   return (
                     <Link key={to} to={to}
@@ -37,6 +39,15 @@ export default function Layout() {
                     </Link>
                   )
                 })}
+                <Link to={convTo}
+                  className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                    location.pathname.startsWith('/conversations')
+                      ? 'bg-emerald-50 text-emerald-700'
+                      : 'text-stone-500 hover:text-stone-700 hover:bg-stone-50'
+                  }`}>
+                  <MessageSquare className="h-4 w-4" />
+                  <span className="hidden sm:inline">对话</span>
+                </Link>
               </div>
             </div>
           </div>
