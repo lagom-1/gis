@@ -35,7 +35,7 @@ export default function Home() {
           使用自然语言描述你的需求，AI 自动规划并执行 GIS 工作流
         </p>
         <Link
-          to="/workspace"
+          to="/gallery"
           className="inline-flex items-center space-x-2 bg-primary-600 text-white px-8 py-4 rounded-lg text-lg font-medium hover:bg-primary-700 transition-colors"
         >
           <span>开始使用</span>

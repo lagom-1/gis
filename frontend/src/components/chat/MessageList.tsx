@@ -14,24 +14,28 @@ interface Props {
   maxSteps?: number
   currentTool?: string
   reason?: string
+  hideTools?: boolean
 }
 
-export function MessageList({ messages, toolCalls, phase, answer, step, maxSteps, currentTool, reason }: Props) {
+export function MessageList({ messages, toolCalls, phase, answer, step, maxSteps, currentTool, reason, hideTools }: Props) {
   const endRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, toolCalls, phase, answer])
 
-  const isActive = phase === 'thinking' || phase === 'executing'
+  const isStreaming = phase === 'thinking' || phase === 'executing'
 
-  // 收集 SSE 实时工具名称，用于去重（SSE 工具调用和 API 持久化消息去重）
-  const liveToolNames = new Set(toolCalls.map(tc => tc.tool))
+  // SSE 流活跃时，用实时工具名称去重持久化消息避免重复显示
+  // 流结束后（done/idle），持久化消息是权威数据源，实时 toolCalls 可能因事件丢失而 stale
+  const liveToolNames = isStreaming ? new Set(toolCalls.map(tc => tc.tool)) : new Set<string>()
 
   return (
     <div className="space-y-1">
       {messages.map((msg) => {
         if (msg.role === 'tool_call' || msg.role === 'tool_result') {
+          // 任务完成后隐藏工具步骤消息，保持页面简洁
+          if (hideTools) return null
           // 如果 SSE 实时流中已有同名工具调用，跳过 API 持久化消息（避免重复显示）
           const msgToolName = msg.tool_name || ''
           if (msgToolName && liveToolNames.has(msgToolName)) {
@@ -49,15 +53,15 @@ export function MessageList({ messages, toolCalls, phase, answer, step, maxSteps
           return <ToolCallCard key={`${msg.id}-${msg.role}`} call={call} />
         }
         return (
-          <MessageBubble key={`${msg.id}-${msg.role}`} role={msg.role} content={msg.content} timestamp={msg.created_at} />
+          <MessageBubble key={`${msg.id}-${msg.role}`} role={msg.role} content={msg.content} timestamp={msg.created_at} hideTools={hideTools} />
         )
       })}
 
-      {toolCalls.map((tc, i) => (
+      {!hideTools && isStreaming && toolCalls.map((tc, i) => (
         <ToolCallCard key={`live-${tc.tool}-${i}`} call={tc} />
       ))}
 
-      {isActive && (
+      {isStreaming && (
         <div className="flex justify-start">
           <div className="bg-amber-50 border border-amber-100 rounded-2xl rounded-bl-md px-4 py-3">
             <div className="flex items-center gap-2">

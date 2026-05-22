@@ -114,7 +114,7 @@ class _GeeLSTBase(BaseTool):
 class GeeComputeLSTTool(_GeeLSTBase):
     def execute(self, start_date=None, end_date=None, cloud_pct=30, scale=30,
                 region=None, region_path=None, project_id=None,
-                download_timeout=1800) -> Dict[str, Any]:
+                download_timeout=7200) -> Dict[str, Any]:
         if not start_date or not end_date:
             start_date, end_date = _default_last_full_month()
 
@@ -168,7 +168,7 @@ class GeeDownloadLandsatSCATool(_GeeLSTBase):
     def execute(self, start_date=None, end_date=None, region=None, region_path=None,
                 scale=30, cloud_pct=30, reducer="median", mask_clouds=True,
                 project_id=None, drive_folder=None, local_drive_path=None,
-                download_timeout=1800, output_tif=None) -> Dict[str, Any]:
+                download_timeout=7200, output_tif=None) -> Dict[str, Any]:
         if not start_date or not end_date:
             start_date, end_date = _default_last_full_month()
 
@@ -224,7 +224,7 @@ class GeeDownloadLandsatSCATool(_GeeLSTBase):
 class GeeDownloadMonthlyLSTTool(_GeeLSTBase):
     def execute(self, start_date=None, end_date=None, scale=30, region=None,
                 region_path=None, project_id=None, drive_folder=None,
-                local_drive_path=None, download_timeout=1800) -> Dict[str, Any]:
+                local_drive_path=None, download_timeout=7200) -> Dict[str, Any]:
         if not start_date or not end_date:
             start_date, end_date = _default_last_full_month()
 
@@ -279,7 +279,7 @@ class GeeDownloadYearlyLSTTool(_GeeLSTBase):
     def execute(self, year=2025, months=None, output_dir=None, scale=30,
                 region=None, region_path=None, project_id=None,
                 drive_folder=None, local_drive_path=None,
-                download_timeout=1800) -> Dict[str, Any]:
+                download_timeout=7200) -> Dict[str, Any]:
         region = region or self._get_region({})
         if region is None:
             return {
@@ -309,6 +309,19 @@ class GeeDownloadYearlyLSTTool(_GeeLSTBase):
             download_timeout=int(download_timeout),
         )
         if result.get("success") and result.get("results"):
+            # 收集所有输出文件
+            output_files = []
+            for r in result["results"]:
+                tif_path = r.get("output_tif")
+                if tif_path and os.path.exists(tif_path):
+                    output_files.append({
+                        "name": os.path.basename(tif_path),
+                        "path": tif_path,
+                        "size": os.path.getsize(tif_path),
+                    })
+            result["output_files"] = output_files
+
+            # 更新 runtime 为最后一个文件
             last = result["results"][-1]
             if last.get("output_tif") and os.path.exists(last["output_tif"]):
                 self.runtime.current_dataset = last["output_tif"]
@@ -332,7 +345,7 @@ class GeeDownloadMultiYearLSTTool(_GeeLSTBase):
     def execute(self, start_year=2020, end_year=2025, month=8, output_dir=None,
                 scale=30, region=None, region_path=None, project_id=None,
                 drive_folder=None, local_drive_path=None,
-                download_timeout=1800) -> Dict[str, Any]:
+                download_timeout=7200) -> Dict[str, Any]:
         region = region or self._get_region({})
         if region is None:
             return {
@@ -364,6 +377,19 @@ class GeeDownloadMultiYearLSTTool(_GeeLSTBase):
             download_timeout=int(download_timeout),
         )
         if result.get("success") and result.get("results"):
+            # 收集所有输出文件
+            output_files = []
+            for r in result["results"]:
+                tif_path = r.get("output_tif")
+                if tif_path and os.path.exists(tif_path):
+                    output_files.append({
+                        "name": os.path.basename(tif_path),
+                        "path": tif_path,
+                        "size": os.path.getsize(tif_path),
+                    })
+            result["output_files"] = output_files
+
+            # 更新 runtime 为最后一个文件
             last = result["results"][-1]
             if last.get("output_tif") and os.path.exists(last["output_tif"]):
                 self.runtime.current_dataset = last["output_tif"]

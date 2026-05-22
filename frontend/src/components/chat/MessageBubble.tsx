@@ -5,6 +5,7 @@ interface Props {
   content: string
   timestamp: string
   children?: ReactNode
+  hideTools?: boolean
 }
 
 const styles: Record<string, string> = {
@@ -31,7 +32,10 @@ function renderContent(text: string): string {
     .replace(/\n/g, '<br/>')
 }
 
-export function MessageBubble({ role, content, timestamp, children }: Props) {
+export function MessageBubble({ role, content, timestamp, children, hideTools }: Props) {
+  if (hideTools && (role === 'tool_call' || role === 'tool_result')) {
+    return null
+  }
   if (role === 'system') {
     return (
       <div className="flex justify-center py-1">

@@ -322,7 +322,7 @@ export default function Workspace() {
   }, [expandedConvId])
 
   return (
-    <div className="h-[calc(100vh-56px)] flex overflow-hidden bg-stone-50">
+    <div className="h-full flex overflow-hidden bg-stone-50">
       {/* ── 左侧：对话列表区 ── */}
       <div className="w-[480px] min-w-[400px] flex-shrink-0 flex flex-col border-r border-stone-200 bg-white">
         {/* 头部 */}

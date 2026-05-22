@@ -15,6 +15,10 @@ import logging
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
+# 必须在任何 matplotlib.pyplot 导入之前设置，ThreadPoolExecutor 子线程需要 Agg 后端
+import matplotlib
+matplotlib.use("Agg")
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse

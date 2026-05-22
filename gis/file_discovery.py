@@ -22,7 +22,7 @@ def find_local_files(
     extensions: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """
-    搜索本地文件
+    搜索本地文件。优先搜索 workspace/outputs/ 目录，确保项目产出文件快速命中。
 
     Args:
         query: 文件名关键词（支持空格分词匹配）
@@ -31,89 +31,110 @@ def find_local_files(
         extensions: 限定扩展名列表
     """
     query = (query or "").strip().lower()
-    roots = roots or default_search_roots()
     ext_filter = {e.lower() if e.startswith(".") else f".{e.lower()}" for e in (extensions or [])}
 
-    results: List[Dict[str, Any]] = []
-    # 过滤掉过短的 token（至少 2 个字符）
+    # 过滤掉过短的 token（至少 1 个字符）
     query_tokens = [
         t for t in query.replace("_", " ").replace("-", " ").split()
-        if t and len(t) >= MIN_TOKEN_LENGTH
+        if t and len(t) >= 1
     ]
 
-    import time
-    search_deadline = time.time() + 30  # 最多搜索 30 秒
+    results: List[Dict[str, Any]] = []
 
-    for root in roots:
-        if not os.path.exists(root):
-            continue
-        # 跳过盘符根目录，太昂贵
-        root_path = Path(root).resolve()
-        if str(root_path) in {"C:\\", "D:\\", "E:\\", "G:\\"}:
-            continue
-        root_depth = root.count(os.sep)
-        for dirpath, dirnames, filenames in os.walk(root):
-            if time.time() > search_deadline:
-                break
-            # 限制搜索深度
-            current_depth = dirpath.count(os.sep) - root_depth
-            if current_depth >= MAX_WALK_DEPTH:
-                dirnames.clear()  # 不再深入
-                continue
-            # 跳过隐藏目录和常见无关目录
-            dirnames[:] = [
-                d for d in dirnames
-                if not d.startswith('.') and d not in {
-                    'node_modules', '__pycache__', '.git', '.venv',
-                    'venv', 'env', '.idea', '.vscode',
-                }
-            ]
-            for name in filenames:
-                ext = os.path.splitext(name)[1].lower()
+    def _match(name: str) -> bool:
+        """检查文件名是否匹配查询"""
+        hay = name.lower()
+        if not query:
+            return True
+        if query in hay or fnmatch.fnmatch(hay, f"*{query}*"):
+            return True
+        if query_tokens and all(tok in hay for tok in query_tokens):
+            return True
+        return False
+
+    def _scan_dir(directory: str, depth: int = 0, max_depth: int = 4) -> bool:
+        """递归扫描目录，返回是否因找到足够结果而中止"""
+        if depth > max_depth:
+            return False
+        try:
+            entries = os.scandir(directory)
+        except OSError:
+            return False
+
+        dirs_to_scan = []
+        for entry in entries:
+            if entry.is_file():
+                ext = os.path.splitext(entry.name)[1].lower()
                 if ext_filter and ext not in ext_filter:
                     continue
-                hay = name.lower()
-                path = os.path.join(dirpath, name)
-                matched = False
-                if not query:
-                    matched = True
-                elif query in hay or fnmatch.fnmatch(hay, f"*{query}*"):
-                    matched = True
-                elif query_tokens and all(tok in hay for tok in query_tokens):
-                    matched = True
-                if not matched:
+                if not _match(entry.name):
                     continue
                 try:
-                    st = os.stat(path)
+                    st = entry.stat()
                     size_bytes = st.st_size
                     mtime = st.st_mtime
                 except OSError:
                     size_bytes = 0
                     mtime = 0
-                # 评分：精确匹配 > token 匹配 > 栅格文件 > 路径深度浅
                 score = 0
-                if query and hay == query:
+                if query and entry.name.lower() == query:
                     score += 100
-                score += sum(10 for tok in query_tokens if tok in hay)
+                score += sum(10 for tok in query_tokens if tok in entry.name.lower())
                 if ext in RASTER_EXTS:
                     score += 5
-                # 路径越浅得分越高（惩罚深层嵌套）
-                path_depth = dirpath.count(os.sep) - root_depth
-                score -= path_depth * 2
+                score -= depth * 2
                 results.append({
-                    "name": name,
-                    "path": path,
+                    "name": entry.name,
+                    "path": entry.path,
                     "extension": ext,
                     "size_bytes": size_bytes,
                     "mtime": mtime,
                     "score": score,
                 })
-                if len(results) > max_results * 8:
-                    break
-            if len(results) > max_results * 8:
+            elif entry.is_dir() and not entry.name.startswith('.'):
+                skip_dirs = {
+                    'node_modules', '__pycache__', '.git', '.venv',
+                    'venv', 'env', '.idea', '.vscode', '.next',
+                }
+                if entry.name not in skip_dirs:
+                    dirs_to_scan.append(entry.path)
+
+            if len(results) >= max_results:
+                return True
+
+        for d in dirs_to_scan:
+            if _scan_dir(d, depth + 1, max_depth):
+                return True
+        return False
+
+    # ── 第一优先级：workspace/outputs/ 目录，递归扫描所有子目录 ──
+    from config import OUTPUTS_DIR
+    outputs_dir = str(OUTPUTS_DIR)
+    if os.path.isdir(outputs_dir):
+        _scan_dir(outputs_dir, depth=0, max_depth=8)  # outputs 内深度放宽
+
+    # 如果 outputs 里没找到足够结果，扫描 workspace/ 根目录
+    if len(results) < max_results:
+        from config import WORKSPACE_DIR
+        ws_dir = str(WORKSPACE_DIR)
+        if os.path.isdir(ws_dir):
+            _scan_dir(ws_dir, depth=0, max_depth=5)
+
+    # ── 第二优先级：用户指定或默认的搜索根目录 ──
+    if len(results) < max_results:
+        roots = roots or default_search_roots()
+        for root in roots:
+            if not os.path.exists(root):
+                continue
+            root_path = str(Path(root).resolve())
+            if root_path in {outputs_dir, str(WORKSPACE_DIR)}:
+                continue  # 已搜索过
+            # 跳过整个盘符根目录（太慢）
+            if root_path in {"C:\\", "D:\\", "E:\\", "G:\\"}:
+                continue
+            _scan_dir(root_path, depth=0, max_depth=4)
+            if len(results) >= max_results:
                 break
-        if len(results) > max_results * 8:
-            break
 
     results.sort(key=lambda x: (-x["score"], -x["mtime"], x["name"]))
     results = results[:max_results]
@@ -121,7 +142,7 @@ def find_local_files(
 
     return {
         "success": bool(results),
-        "message": f"找到 {len(results)} 个候选文件" if results else f"未找到匹配文件: {query}",
+        "message": f"找到 {len(results)} 个候选文件（优先扫描 workspace/outputs/）" if results else f"在 workspace/outputs/ 及常用目录中未找到匹配文件: {query}",
         "files": results,
         "raster_candidates": raster_hits,
         "selected_path": raster_hits[0]["path"] if raster_hits else (results[0]["path"] if results else None),

@@ -16,6 +16,7 @@ export interface Message {
   tool_name?: string
   tool_args?: Record<string, unknown>
   tool_result?: Record<string, unknown>
+  step_number?: number
   output_files?: OutputFile[]
   created_at: string
 }
@@ -23,6 +24,7 @@ export interface Message {
 export interface OutputFile {
   name: string
   path: string
+  relative_path?: string
   size: number
   modified: string
 }

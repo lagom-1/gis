@@ -426,9 +426,10 @@ async def send_message_stream(
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         future = loop.run_in_executor(executor, run_agent)
 
-        # 当前正在执行的工具名（用于增量保存）
+        # 当前正在执行的工具名和步骤号（用于增量保存）
         current_tool_name = ""
         current_tool_args = {}
+        current_step = 0
 
         # 轮询事件直到完成，同时增量保存工具结果到 DB
         # 不设硬性超时——Agent 自身有 max_steps 和循环检测保护
@@ -449,15 +450,18 @@ async def send_message_stream(
             for event_type, data in batch:
                 yield f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
-                if event_type == "tool_start":
+                if event_type == "step_start":
+                    current_step = int(data.get("step", 0))
+
+                elif event_type == "tool_start":
                     current_tool_name = str(data.get("tool", ""))
                     current_tool_args = data.get("args") or {}
 
                 elif event_type == "tool_result":
-                    # 增量保存：每个工具执行完立即写入 DB
-                    tool_name = current_tool_name or str(data.get("tool", ""))
+                    # 增量保存：优先使用事件中的 tool 名，回退到上一个 tool_start
+                    tool_name = str(data.get("tool", "") or current_tool_name)
                     result_data = data.get("result") or {}
-                    step_key = f"{tool_name}-{len(saved_steps)}"
+                    step_key = f"{tool_name}-{current_step}"
                     if step_key not in saved_steps:
                         saved_steps.add(step_key)
                         step_num = len(saved_steps)
@@ -528,11 +532,11 @@ async def send_message_stream(
             except Exception as e:
                 logger.error(f"自动生成专题图失败: {e}")
 
-        # 保存尚未保存的工具调用（兜底）
+        # 保存尚未保存的工具调用（兜底），使用与增量保存一致的 step_key
         for i, h in enumerate(tool_history):
-            step = h.get("step", 0)
             tool = h.get("tool", "")
-            step_key = f"{tool}-{i}"
+            h_step = h.get("step", 0)
+            step_key = f"{tool}-{h_step}"
             if step_key in saved_steps:
                 continue
             saved_steps.add(step_key)
@@ -543,7 +547,7 @@ async def send_message_stream(
             add_message(
                 db, conv_id,
                 role="tool_call",
-                content=reason or f"调用工具: {tool}",
+                content=f"调用工具: {tool}",
                 tool_name=tool,
                 tool_args=args,
                 step_number=step,

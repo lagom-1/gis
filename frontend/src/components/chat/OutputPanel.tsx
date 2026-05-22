@@ -18,13 +18,14 @@ function formatSize(bytes: number) {
 }
 
 function isPreviewable(name: string) {
-  return /\.(png|jpg|jpeg|gif|webp|svg|tif|tiff)$/i.test(name)
+  return /\.(png|jpg|jpeg|gif|webp|svg)$/i.test(name)
 }
 
 function getCategory(name: string) {
   if (/\.gif$/i.test(name)) return 'gif'
   if (/\.html$/i.test(name)) return 'html'
   if (/\.csv$/i.test(name)) return 'csv'
+  if (/\.(tif|tiff)$/i.test(name)) return 'tif'
   return 'image'
 }
 
@@ -34,11 +35,33 @@ function FileIcon({ cat }: { cat: string }) {
     case 'gif': return <Film className={`${cls} text-emerald-500`} />
     case 'html': return <FileText className={`${cls} text-violet-500`} />
     case 'csv': return <Table2 className={`${cls} text-blue-500`} />
+    case 'tif': return <FileImage className={`${cls} text-amber-500`} />
     default: return <FileImage className={`${cls} text-blue-500`} />
   }
 }
 
 const OUTPUT_COLLAPSED_KEY = 'opengis_output_panel_collapsed'
+
+/**
+ * 将后端返回的文件路径转换为前端可访问的 URL。
+ * 与 CanvasPanel 中的 buildFileUrl 逻辑一致。
+ */
+function buildFileUrl(f: OutputFile): string {
+  const raw = (f as any).relative_path || f.path || f.name
+  const normalized = raw.replace(/\\/g, '/')
+  if (normalized.startsWith('/outputs/')) {
+    return normalized.split('/').map(encodeURIComponent).join('/')
+  }
+  if (normalized.startsWith('outputs/')) {
+    return '/' + normalized.split('/').map(encodeURIComponent).join('/')
+  }
+  const idx = normalized.indexOf('/outputs/')
+  if (idx >= 0) {
+    const rel = normalized.slice(idx + 1)
+    return '/' + rel.split('/').map(encodeURIComponent).join('/')
+  }
+  return '/outputs/' + encodeURIComponent(f.name)
+}
 
 export function OutputPanel({ files, onFileClick }: Props) {
   const [preview, setPreview] = useState<OutputFile | null>(null)
@@ -60,13 +83,7 @@ export function OutputPanel({ files, onFileClick }: Props) {
   }, [files])
 
   const active = preview || (files.length > 0 ? files[0] : null)
-  const getUrl = (f: OutputFile) => {
-    // 从完整路径中提取 outputs/ 之后的相对路径
-    const p = (f.path || f.name).replace(/\\/g, '/')
-    const idx = p.lastIndexOf('/outputs/')
-    const rel = idx >= 0 ? p.slice(idx + 1) : `outputs/${f.name}`
-    return '/' + rel.split('/').map(encodeURIComponent).join('/')
-  }
+  const getUrl = buildFileUrl
 
   if (collapsed) {
     return (
@@ -111,15 +128,6 @@ export function OutputPanel({ files, onFileClick }: Props) {
           </div>
         ) : (
           <>
-            {active && isPreviewable(active.name) && (
-              <div
-                className="h-56 bg-gray-100 border-b border-gray-100 flex items-center justify-center cursor-pointer group relative"
-                onClick={() => setLightbox(true)}
-              >
-                <img src={getUrl(active)} alt={active.name} className="max-h-full max-w-full object-contain"
-                  onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
-              </div>
-            )}
             <div className="flex-1 overflow-y-auto p-2 space-y-0.5">
               {files.map(f => {
                 const cat = getCategory(f.name)

@@ -120,11 +120,11 @@ class LLMClient:
         input_str = json.dumps(payload, ensure_ascii=False)
 
         # 最多尝试 3 次，指数退避：1s, 5s
-        # LLM 调用设置 120 秒超时，防止永久阻塞
+        # 无超时限制，GEE 操作过程中 LLM 可能需要长时间等待
         last_error = None
         for attempt in range(3):
             try:
-                raw = chain.invoke({"input": input_str}, config={"timeout": 120})
+                raw = chain.invoke({"input": input_str})
                 text = self._strip_fences(raw)
                 result = _try_parse_json(text)
                 if result is not None:

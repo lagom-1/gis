@@ -3,12 +3,12 @@ import { Map, MessageSquare, Terminal } from 'lucide-react'
 import { useAppStore } from '../stores/appStore'
 
 const STATIC_NAV = [
-  { to: '/workspace', label: '工作空间', icon: Terminal },
+  { to: '/gallery', label: '成果画廊', icon: Terminal },
 ]
 
 export default function Layout() {
   const location = useLocation()
-  const isFullHeight = location.pathname.startsWith('/workspace') || location.pathname.startsWith('/conversations')
+  const isFullHeight = location.pathname.startsWith('/gallery') || location.pathname.startsWith('/workspace') || location.pathname.startsWith('/conversations')
   const activeConversationId = useAppStore(s => s.activeConversationId)
   const convTo = activeConversationId ? `/conversations/${activeConversationId}` : '/conversations'
 
@@ -53,7 +53,7 @@ export default function Layout() {
           </div>
         </div>
       </nav>
-      <main className={isFullHeight ? 'overflow-hidden' : 'max-w-7xl mx-auto px-4 py-6'}>
+      <main className={isFullHeight ? 'h-[calc(100vh-56px)] overflow-hidden' : 'max-w-7xl mx-auto px-4 py-6'}>
         <Outlet />
       </main>
     </div>

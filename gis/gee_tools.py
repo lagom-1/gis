@@ -335,10 +335,20 @@ def _download_direct(
     geom,
     scale: int,
     output_tif: str,
-    timeout_sec: int = 300,
+    timeout_sec: int = 1800,
     geojson_geom: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """先尝试 GEE 直接下载（适合小区域）。太大则回退 Drive。下载完成后用 geojson_geom 精确掩码。"""
+    """先尝试 GEE 直接下载。太大则回退 Drive。下载完成后用 geojson_geom 精确掩码。无超时限制，由调用方传入 download_timeout 控制。"""
+    # 文件已存在且有效则跳过下载
+    if os.path.exists(output_tif) and os.path.getsize(output_tif) > 1024:
+        file_size = os.path.getsize(output_tif) / (1024 * 1024)
+        print(f"[GEE] 文件已存在，跳过直接下载: {output_tif} ({file_size:.1f}MB)")
+        return {
+            "success": True,
+            "message": f"文件已存在，跳过下载（{file_size:.1f}MB）",
+            "source": "cached",
+            "file_size_mb": round(file_size, 1),
+        }
     try:
         size_info = _estimate_download_size(geom, scale)
         if size_info and size_info["size_mb"] > 45:
@@ -425,9 +435,9 @@ def _wait_drive_file(
     scale: int,
     geom,
     sync_dir: str,
-    timeout_sec: int = 900,
+    timeout_sec: int = 7200,
 ) -> Optional[str]:
-    """导出到 Google Drive，等待完成，从本地同步目录获取文件路径。"""
+    """导出到 Google Drive，等待完成，从本地同步目录获取文件路径。无超时限制，由调用方传入 download_timeout 控制。"""
     task = ee.batch.Export.image.toDrive(
         image=export_img,
         description=task_name,
@@ -480,7 +490,7 @@ def _export_to_drive(export_img: ee.Image, task_name: str, folder: str, scale: i
     return task
 
 
-def _wait_for_drive_task(task_id: str, timeout_sec: int = 900, poll_interval: int = 15) -> Dict[str, Any]:
+def _wait_for_drive_task(task_id: str, timeout_sec: int = 7200, poll_interval: int = 15) -> Dict[str, Any]:
     """轮询 GEE task 状态直到完成或超时。"""
     start = time.time()
     while True:
@@ -573,10 +583,10 @@ def _drive_download(
     task_name: str,
     folder: str,
     output_tif: str,
-    timeout_sec: int = 900,
+    timeout_sec: int = 7200,
     local_drive_path: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Drive 下载流程：等待导出完成 → 从本地同步目录查找文件。"""
+    """Drive 下载流程：等待导出完成 → 从本地同步目录查找文件。无超时限制，由调用方传入 download_timeout 控制。"""
     print(f"[GEE] 等待 GEE 导出任务完成（最长 {timeout_sec}s）...")
     task_result = _wait_for_drive_task(task_id, timeout_sec=timeout_sec)
     if not task_result.get("success"):
@@ -620,7 +630,7 @@ def gee_compute_lst(
     scale: int = 30,
     cloud_pct: float = 30,
     project_id: Optional[str] = None,
-    download_timeout: int = 900,
+    download_timeout: int = 7200,
     drive_folder: str = "",
     local_drive_path: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -656,27 +666,41 @@ def gee_compute_lst(
         return {"success": False, "message": f"AOI 解析失败: {e}"}
 
     try:
-        # 构建 Landsat 8/9 L2 影像集合并做云掩膜
-        l8 = (
-            ee.ImageCollection("LANDSAT/LC08/C02/T1_L2")
-            .filterBounds(geom)
-            .filterDate(start_date, end_date)
-            .filter(ee.Filter.lte("CLOUD_COVER", cloud_pct))
-        )
-        l9 = (
-            ee.ImageCollection("LANDSAT/LC09/C02/T1_L2")
-            .filterBounds(geom)
-            .filterDate(start_date, end_date)
-            .filter(ee.Filter.lte("CLOUD_COVER", cloud_pct))
-        )
-        col = l8.merge(l9)
+        # 渐进式云量降级：先尝试用户指定的阈值，无数据则逐步放宽
+        cloud_levels = sorted(set([float(cloud_pct), 40, 60, 80, 100]))
+        col = None
+        count = 0
+        used_cloud_pct = float(cloud_pct)
 
-        count = col.size().getInfo()
+        for level in cloud_levels:
+            if level < used_cloud_pct - 0.01:  # 跳过低于用户指定值的阈值
+                continue
+            l8 = (
+                ee.ImageCollection("LANDSAT/LC08/C02/T1_L2")
+                .filterBounds(geom)
+                .filterDate(start_date, end_date)
+                .filter(ee.Filter.lte("CLOUD_COVER", level))
+            )
+            l9 = (
+                ee.ImageCollection("LANDSAT/LC09/C02/T1_L2")
+                .filterBounds(geom)
+                .filterDate(start_date, end_date)
+                .filter(ee.Filter.lte("CLOUD_COVER", level))
+            )
+            col = l8.merge(l9)
+            count = col.size().getInfo()
+            if count > 0:
+                used_cloud_pct = level
+                break
+
         if count == 0:
             return {
                 "success": False,
-                "message": f"指定时段 {start_date}~{end_date} 云量<={cloud_pct}% 无可用影像，请放宽云量或调整日期",
+                "message": f"指定时段 {start_date}~{end_date} 云量<={cloud_pct}% 无可用影像，已尝试放宽至 100% 仍无数据。建议：1) 扩大日期范围（±1-2月）；2) 更换年份；3) 该区域此季节云覆盖极高",
             }
+
+        if used_cloud_pct > float(cloud_pct):
+            print(f"[GEE LST] 注意：原始云量阈值 {cloud_pct}% 无可用影像，已自动放宽至 {used_cloud_pct}%（找到 {count} 景）")
 
         # 云掩膜
         qa = col.first().select("QA_PIXEL").bandNames()
@@ -748,7 +772,7 @@ def gee_compute_lst(
                 geom=geom,
                 scale=int(scale),
                 output_tif=output_tif,
-                timeout_sec=min(int(download_timeout), 300),
+                timeout_sec=int(download_timeout),
                 geojson_geom=_geojson_geom,
             )
             if direct_result.get("success"):
@@ -795,9 +819,10 @@ def gee_compute_lst(
 
         return {
             "success": True,
-            "message": f"GEE 云端 LST 反演完成：{count} 景合成，{file_size:.1f}MB，温度范围 {lst_min}~{lst_max}°C，均值 {lst_mean}°C",
+            "message": f"GEE 云端 LST 反演完成：{count} 景合成（云量≤{used_cloud_pct:.0f}%），{file_size:.1f}MB，温度范围 {lst_min}~{lst_max}°C，均值 {lst_mean}°C",
             "output_tif": output_tif,
             "scene_count": count,
+            "cloud_pct_used": used_cloud_pct,
             "lst_min": lst_min,
             "lst_max": lst_max,
             "lst_mean": lst_mean,
@@ -824,7 +849,7 @@ def gee_download_landsat_sca(
     project_id: Optional[str] = None,
     drive_folder: str = "",
     local_drive_path: Optional[str] = None,
-    download_timeout: int = 900,
+    download_timeout: int = 7200,
 ) -> Dict[str, Any]:
     """
     从 GEE 下载适合本地 SCA 单通道反演的数据。
@@ -926,7 +951,7 @@ def gee_download_landsat_sca(
             geom=geom,
             scale=int(scale),
             output_tif=output_tif,
-            timeout_sec=min(int(download_timeout), 300),
+            timeout_sec=int(download_timeout),
             geojson_geom=_geojson_geom,
         )
 
@@ -1026,7 +1051,7 @@ def gee_download_monthly_lst(
     project_id: Optional[str] = None,
     drive_folder: str = "",
     local_drive_path: Optional[str] = None,
-    download_timeout: int = 900,
+    download_timeout: int = 7200,
 ) -> Dict[str, Any]:
     """
     月度 LST 智能合成（分级降级策略）。
@@ -1197,7 +1222,7 @@ def gee_download_monthly_lst(
             geom=geom,
             scale=int(scale),
             output_tif=output_tif,
-            timeout_sec=min(int(download_timeout), 300),
+            timeout_sec=int(download_timeout),
             geojson_geom=_geojson_geom,
         )
 
@@ -1275,7 +1300,7 @@ def gee_download_yearly_lst(
     project_id: Optional[str] = None,
     drive_folder: str = "",
     local_drive_path: Optional[str] = None,
-    download_timeout: int = 900,
+    download_timeout: int = 7200,
 ) -> Dict[str, Any]:
     """
     批量下载全年 12 个月的月度 LST 合成结果。
@@ -1331,6 +1356,19 @@ def gee_download_yearly_lst(
             start_date = f"{year}-{month:02d}-01"
             end_date = f"{year}-{month:02d}-{last_day:02d}"
             output_tif = os.path.join(output_dir, f"{region_name + '_' if region_name else ''}{year}_{month:02d}_lst.tif")
+
+            # 文件已存在且有效则跳过，避免重复下载
+            if os.path.exists(output_tif) and os.path.getsize(output_tif) > 1024:
+                print(f"[GEE] 文件已存在，跳过: {output_tif}")
+                results.append({
+                    "month": month,
+                    "output_tif": output_tif,
+                    "scene_count": "已存在",
+                    "total_scenes": "已存在",
+                    "quality": "缓存",
+                    "method": "跳过（文件已存在）",
+                })
+                continue
 
             try:
                 # 获取整月所有场景
@@ -1432,7 +1470,7 @@ def gee_download_yearly_lst(
                     geom=geom,
                     scale=int(scale),
                     output_tif=output_tif,
-                    timeout_sec=min(int(download_timeout), 300),
+                    timeout_sec=int(download_timeout),
                     geojson_geom=_geojson_geom,
                 )
 
@@ -1519,7 +1557,7 @@ def gee_download_multi_year_lst(
     project_id: Optional[str] = None,
     drive_folder: str = "",
     local_drive_path: Optional[str] = None,
-    download_timeout: int = 900,
+    download_timeout: int = 7200,
 ) -> Dict[str, Any]:
     """
     跨多年单月 LST 批量反演。
@@ -1575,6 +1613,19 @@ def gee_download_multi_year_lst(
             start_date = f"{year}-{month:02d}-01"
             end_date = f"{year}-{month:02d}-{last_day:02d}"
             output_tif = os.path.join(output_dir, f"{region_name + '_' if region_name else ''}{year}_{month:02d}_lst.tif")
+
+            # 文件已存在且有效则跳过，避免重复下载
+            if os.path.exists(output_tif) and os.path.getsize(output_tif) > 1024:
+                print(f"[GEE] 文件已存在，跳过: {output_tif}")
+                results.append({
+                    "year": year,
+                    "output_tif": output_tif,
+                    "scene_count": "已存在",
+                    "total_scenes": "已存在",
+                    "quality": "缓存",
+                    "method": "跳过（文件已存在）",
+                })
+                continue
 
             try:
                 col8 = (
@@ -1672,7 +1723,7 @@ def gee_download_multi_year_lst(
                     geom=geom,
                     scale=int(scale),
                     output_tif=output_tif,
-                    timeout_sec=min(int(download_timeout), 300),
+                    timeout_sec=int(download_timeout),
                     geojson_geom=_geojson_geom,
                 )
 

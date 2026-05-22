@@ -13,7 +13,7 @@ export default function Login() {
     e.preventDefault()
     if (!username.trim() || !password.trim()) return
     const ok = await login({ username: username.trim(), password })
-    if (ok) navigate('/workspace')
+    if (ok) navigate('/gallery')
   }
 
   return (

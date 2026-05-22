@@ -13,24 +13,25 @@ interface Props {
   onToolResult?: (call: ToolCall) => void
   onSendStart?: () => void
   onCancel?: () => void
+  hideTools?: boolean
 }
 
-export function ChatPanel({ convId, messages, onNewMessage, onToolResult, onSendStart, onCancel }: Props) {
+export function ChatPanel({ convId, messages, onNewMessage, onToolResult, onSendStart, onCancel, hideTools }: Props) {
   const { phase, toolCalls, answer, send, abort } = useConversation()
   const prevPhaseRef = useRef(phase)
   const prevAnswerRef = useRef(answer)
-  const prevToolCallsLenRef = useRef(0)
+  const notifiedCountRef = useRef(0)
 
   useEffect(() => {
     const wasNotDone = prevPhaseRef.current !== 'done'
     const isNowDone = phase === 'done'
-    const hasNewAnswer = answer && answer !== prevAnswerRef.current
-    if (isNowDone && wasNotDone && hasNewAnswer) {
+    if (isNowDone && wasNotDone) {
+      const content = answer || '任务已完成。'
       onNewMessage({
         id: Date.now(),
         conversation_id: convId ?? 0,
         role: 'assistant',
-        content: answer,
+        content,
         created_at: new Date().toISOString(),
       })
     }
@@ -39,12 +40,14 @@ export function ChatPanel({ convId, messages, onNewMessage, onToolResult, onSend
   }, [phase, answer, convId, onNewMessage])
 
   useEffect(() => {
-    if (toolCalls.length > prevToolCallsLenRef.current && onToolResult) {
-      toolCalls.slice(prevToolCallsLenRef.current).forEach(call => {
-        if (call.status === 'success' || call.status === 'error') onToolResult(call)
+    if (!onToolResult) return
+    const completed = toolCalls.filter(call => call.status === 'success' || call.status === 'error')
+    if (completed.length > notifiedCountRef.current) {
+      completed.slice(notifiedCountRef.current).forEach(call => {
+        onToolResult(call)
       })
     }
-    prevToolCallsLenRef.current = toolCalls.length
+    notifiedCountRef.current = completed.length
   }, [toolCalls, onToolResult])
 
   const handleSend = useCallback(async (content: string) => {
@@ -106,6 +109,7 @@ export function ChatPanel({ convId, messages, onNewMessage, onToolResult, onSend
           maxSteps={undefined}
           currentTool={toolCalls[toolCalls.length - 1]?.tool}
           reason={toolCalls[toolCalls.length - 1]?.reason}
+          hideTools={hideTools}
         />
         <ExamplePrompts onSelect={handleSend} />
       </div>

@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback } from 'react'
-import { ZoomIn, ZoomOut, RotateCcw, Move } from 'lucide-react'
+import { ZoomIn, ZoomOut, RotateCcw, Move, ImageOff } from 'lucide-react'
 
 interface ImageViewerProps {
   src: string
@@ -12,6 +12,7 @@ export default function ImageViewer({ src, alt, className = '' }: ImageViewerPro
   const [position, setPosition] = useState({ x: 0, y: 0 })
   const [isDragging, setIsDragging] = useState(false)
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 })
+  const [imgError, setImgError] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
 
   const clampScale = (s: number) => Math.min(Math.max(s, 0.2), 10)
@@ -44,9 +45,28 @@ export default function ImageViewer({ src, alt, className = '' }: ImageViewerPro
     setPosition({ x: 0, y: 0 })
   }, [])
 
+  // 图片加载失败时显示错误占位
+  if (imgError) {
+    return (
+      <div className={`flex items-center justify-center bg-gray-100 rounded ${className}`}>
+        <div className="text-center text-gray-400 px-4">
+          <ImageOff className="h-10 w-10 mx-auto mb-2 opacity-40" />
+          <p className="text-sm font-medium text-gray-500">图片加载失败</p>
+          <p className="text-xs mt-1 text-gray-400 max-w-[200px] truncate" title={alt}>{alt}</p>
+          <button
+            onClick={() => setImgError(false)}
+            className="mt-3 px-3 py-1.5 text-xs text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors"
+          >
+            重试
+          </button>
+        </div>
+      </div>
+    )
+  }
+
   return (
-    <div className={`relative group ${className}`} ref={containerRef}>
-      {/* 缩放控件 */}
+    <div className={`group ${className || 'relative w-full h-full'}`} ref={containerRef}>
+      {/* 缩放控件 (绝对定位，浮在图片上方) */}
       <div className="absolute top-2 right-2 z-10 flex space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
         <button
           onClick={() => setScale(s => clampScale(s + 0.3))}
@@ -74,9 +94,9 @@ export default function ImageViewer({ src, alt, className = '' }: ImageViewerPro
         </span>
       </div>
 
-      {/* 可拖拽缩放容器 */}
+      {/* 可拖拽缩放容器 — 使用 absolute inset-0 确保填满父元素，不受 h-full 高度链影响 */}
       <div
-        className="overflow-hidden w-full h-full flex items-center justify-center"
+        className="absolute inset-0 overflow-hidden flex items-center justify-center"
         onWheel={handleWheel}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
@@ -88,6 +108,8 @@ export default function ImageViewer({ src, alt, className = '' }: ImageViewerPro
           src={src}
           alt={alt}
           draggable={false}
+          onError={() => setImgError(true)}
+          onLoad={() => setImgError(false)}
           style={{
             transform: `translate(${position.x}px, ${position.y}px) scale(${scale})`,
             transition: isDragging ? 'none' : 'transform 0.15s ease-out',
@@ -95,6 +117,7 @@ export default function ImageViewer({ src, alt, className = '' }: ImageViewerPro
           className="max-w-full max-h-full object-contain select-none"
         />
       </div>
+
       {scale > 1 && (
         <div className="absolute bottom-2 left-2 text-xs text-gray-400 bg-white/80 px-1.5 py-0.5 rounded">
           <Move className="h-3 w-3 inline mr-1" />

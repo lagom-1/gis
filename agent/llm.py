@@ -36,7 +36,7 @@ def get_llm():
                 api_key=api_key,
                 base_url="https://api.deepseek.com",
                 temperature=temperature,
-                request_timeout=120,  # 2分钟超时
+                request_timeout=None,  # 无超时限制（GEE 操作中 LLM 可能需要长时间等待）
                 max_retries=2,
             )
         except Exception as e:
@@ -141,29 +141,27 @@ class LLMClient:
 
         input_str = json.dumps(payload, ensure_ascii=False)
 
-        # 最多尝试 3 次，指数退避：1s, 5s
-        # LLM 调用设置 120 秒超时，防止永久阻塞
-        last_error = None
-        for attempt in range(3):
+        # 最多尝试 2 次，指数退避：1s
+        last_text = None
+        for attempt in range(2):
             try:
-                raw = chain.invoke({"input": input_str}, config={"timeout": 120})
+                raw = chain.invoke({"input": input_str})
                 text = self._strip_fences(raw)
+                last_text = text
                 result = _try_parse_json(text)
                 if result is not None:
                     return result
-                last_error = f"JSON 解析失败 (attempt {attempt+1}): {text[:200]}..."
-                print(f"[LLM] {last_error}")
+                print(f"[LLM] JSON 解析失败 (attempt {attempt+1}): {text[:150]}...")
             except Exception as e:
-                last_error = f"LLM 调用失败 (attempt {attempt+1}): {e}"
-                print(f"[LLM] {last_error}")
+                print(f"[LLM] LLM 调用异常 (attempt {attempt+1}): {e}")
 
-            # 指数退避：第1次重试等1秒，第2次重试等5秒
-            if attempt < 2:
-                wait_time = 1 if attempt == 0 else 5
-                print(f"[LLM] 等待 {wait_time} 秒后重试...")
-                time.sleep(wait_time)
+            if attempt < 1:
+                time.sleep(1)
 
-        raise RuntimeError(f"LLM 调用失败（已重试 3 次）: {last_error}")
+        # 优雅降级：将 LLM 文本响应包装为 final 决策
+        fallback_text = (last_text or "任务处理中，请重新描述你的需求。")[:800]
+        print(f"[LLM] JSON 解析全部失败，降级为 final_answer: {fallback_text[:100]}...")
+        return {"type": "final", "answer": fallback_text}
 
     def invoke_text(self, system_prompt: str, user_msg: str) -> str:
         """调用 LLM 返回纯文本"""

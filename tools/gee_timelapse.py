@@ -72,6 +72,7 @@ class GeeLSTTimelapseTool(BaseTool):
         )
         if result.get("success") and result.get("gif_path"):
             self.runtime.last_output = result["gif_path"]
+            result["output_gif"] = result["gif_path"]
         return result
 
 
@@ -107,6 +108,7 @@ class GeeLSTSplitPanelTool(BaseTool):
         )
         if result.get("success"):
             self.runtime.last_output = output_path
+            result["output_html"] = output_path
         return result
 
 
@@ -141,6 +143,7 @@ class GeeLSTTrendChartTool(BaseTool):
         )
         if result.get("success"):
             self.runtime.last_output = output_path
+            result["output_png"] = output_path
         return result
 
 
@@ -183,6 +186,8 @@ class GeeLSTTimelapseLocalTool(BaseTool):
         )
         if result.get("success") and result.get("gif_path"):
             self.runtime.last_output = result["gif_path"]
+            # 统一输出字段：前端按 output_gif / output_html 提取文件
+            result["output_gif"] = result["gif_path"]
             lst_tifs = result.get("lst_tifs", [])
             years_ok = result.get("years_ok", [])
             if lst_tifs and years_ok:
@@ -196,4 +201,5 @@ class GeeLSTTimelapseLocalTool(BaseTool):
                 )
                 if web_result.get("success"):
                     result["web_map_path"] = web_path
+                    result["output_html"] = web_path
         return result

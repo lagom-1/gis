@@ -84,10 +84,19 @@ export function useConversation(): UseConversationReturn {
           }
         }
 
-        // 处理最后一个可能不完整的event
+        // 流结束后处理最后一个事件
         if (eventType && eventData) {
-          // Don't clear - it might be incomplete, wait for more data
+          try {
+            const data = JSON.parse(eventData)
+            handleEvent(eventType as SSEEventType, data)
+          } catch { /* skip malformed events */ }
         }
+      }
+
+      // 连接已关闭但未收到完成信号（后端崩溃或异常中断）
+      if (phaseRef.current !== 'done' && phaseRef.current !== 'waiting_for_user') {
+        updatePhase('done')
+        setAnswer('连接已断开，任务可能未完成。请检查输出面板确认结果。')
       }
     } catch (err: unknown) {
       if ((err as Error).name !== 'AbortError') {
@@ -116,13 +125,27 @@ export function useConversation(): UseConversationReturn {
       case 'tool_result': {
         const toolName = data.tool as string
         const result = data.result as Record<string, unknown>
-        setToolCalls((prev) =>
-          prev.map((tc) =>
-            tc.tool === toolName && tc.status === 'running'
-              ? { ...tc, result, status: result?.success === false ? ('error' as const) : ('success' as const) }
-              : tc
-          )
-        )
+        setToolCalls((prev) => {
+          // 找到最后一个匹配的 tool_call，优先更新 status === 'running' 的，否则更新最后一个匹配的
+          const runningIdx = prev.map((tc, i) => ({ tc, i })).filter(({ tc }) => tc.tool === toolName && tc.status === 'running').pop()?.i
+          if (runningIdx !== undefined) {
+            return prev.map((tc, i) =>
+              i === runningIdx
+                ? { ...tc, result, status: result?.success === false ? ('error' as const) : ('success' as const) }
+                : tc
+            )
+          }
+          // 回退：更新最后一个同名工具调用（处理 GEE 自动重试等场景）
+          const lastIdx = prev.map((tc, i) => ({ tc, i })).filter(({ tc }) => tc.tool === toolName).pop()?.i
+          if (lastIdx !== undefined) {
+            return prev.map((tc, i) =>
+              i === lastIdx
+                ? { ...tc, result, status: result?.success === false ? ('error' as const) : ('success' as const) }
+                : tc
+            )
+          }
+          return prev
+        })
         break
       }
       case 'ask_user': {

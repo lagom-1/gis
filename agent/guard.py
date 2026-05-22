@@ -11,15 +11,38 @@ from typing import Any, Dict, List, Optional
 class SafetyGuard:
     """Agent 安全守卫：循环检测 + 自动出图判断"""
 
-    def __init__(self, max_map_calls=2, max_style_calls=2, max_consecutive_same=3):
+    def __init__(self, max_map_calls=2, max_style_calls=2, max_consecutive_same=3,
+                 max_download_calls=5, max_set_dataset_calls=4):
         self.max_map_calls = max_map_calls
         self.max_style_calls = max_style_calls
         self.max_consecutive_same = max_consecutive_same
+        self.max_download_calls = max_download_calls
+        self.max_set_dataset_calls = max_set_dataset_calls
+
+    # 所有下载类工具
+    _DOWNLOAD_TOOLS = {
+        "gee_download_landsat_sca", "gee_download_monthly_lst",
+        "gee_download_yearly_lst", "gee_download_multi_year_lst",
+        "gee_compute_lst", "gee_download_lst",
+    }
+
+    # 幂等工具：一次成功后禁止再调
+    _IDEMPOTENT_ONCE = {"resolve_admin_region", "gee_init"}
 
     def check(self, history: List[Dict[str, Any]]) -> str:
         """检查历史记录，返回停止原因或空字符串"""
         if len(history) < 2:
             return ""
+
+        # ── 单工具总次数限制 ──
+
+        # set_current_dataset 同轮调用超过限制 → 强制制图
+        set_calls = [h for h in history if h.get("tool") == "set_current_dataset"]
+        if len(set_calls) >= self.max_set_dataset_calls:
+            return (
+                f"set_current_dataset 已调用 {len(set_calls)} 次。"
+                "请停止切换数据集，对当前数据集调用 make_thematic_map 生成专题图。你必须立即返回 final。"
+            )
 
         # set_map_style 同轮调用两次
         style_calls = [h for h in history if h.get("tool") == "set_map_style"]
@@ -31,20 +54,37 @@ class SafetyGuard:
         if len(map_calls) >= self.max_map_calls:
             return "同一轮对话中 make_thematic_map 已调用多次。出图一次就够了。你必须立即返回 final。"
 
-        # 下载工具连续调用 2 次
-        _download_tools = {
-            "gee_download_landsat_sca", "gee_download_monthly_lst",
-            "gee_download_yearly_lst", "gee_download_multi_year_lst",
-        }
+        # 下载工具总次数限制
+        for tool_name in self._DOWNLOAD_TOOLS:
+            dl_calls = [h for h in history if h.get("tool") == tool_name]
+            if len(dl_calls) >= self.max_download_calls:
+                return (
+                    f"{tool_name} 已调用 {len(dl_calls)} 次。数据下载已超过限制，"
+                    "文件要么已存在要么无法获取。你必须立即返回 final，汇总已下载的结果。"
+                )
+
+        # ── 连续调用检测 ──
+
+        # download 工具连续调用 2 次
         if len(history) >= 2:
             last_two = [h.get("tool") for h in history[-2:]]
-            if last_two[0] == last_two[1] and last_two[0] in _download_tools:
+            if last_two[0] == last_two[1] and last_two[0] in self._DOWNLOAD_TOOLS:
                 return f"{last_two[0]} 已连续调用 2 次，数据已下载完毕，禁止重复下载。你必须立即返回 final。"
 
-        # 幂等工具：已成功执行过则禁止重复调用
-        _IDEMPOTENT_ONCE = {"resolve_admin_region", "gee_init"}
-        last_tool = history[-1].get("tool")
-        if last_tool in _IDEMPOTENT_ONCE:
+        # 参数级去重：同一工具 + 相同 args → 禁止重复
+        last = history[-1]
+        last_tool = last.get("tool")
+        last_args = last.get("args", {})
+        if last_tool and last_args:
+            for h in history[:-1]:
+                if h.get("tool") == last_tool and h.get("args") == last_args:
+                    return (
+                        f"{last_tool} 已用相同参数 {last_args} 调用过。"
+                        "结果应当已存在，禁止重复调用。你必须立即返回 final。"
+                    )
+
+        # 幂等工具：已成功执行过则禁止重复调用；失败时允许用户纠正参数后重试
+        if last_tool in self._IDEMPOTENT_ONCE:
             prev_success = [
                 h for h in history[:-1]
                 if h.get("tool") == last_tool and h.get("result", {}).get("success")
@@ -58,11 +98,23 @@ class SafetyGuard:
             if all(h.get("tool") == last_tool for h in history[-3:]):
                 return f"{last_tool} 已连续调用 3 次。你必须立即返回 final。"
 
-        # set_map_style ↔ make_thematic_map 交替循环
+        # ── 交替循环检测 ──
+
+        # style ↔ map 交替
         if len(history) >= 4:
             recent = [h.get("tool") for h in history[-4:]]
             if recent == ["set_map_style", "make_thematic_map", "set_map_style", "make_thematic_map"]:
                 return "set_map_style 和 make_thematic_map 已交替循环。你必须立即返回 final。"
+
+        # 通用交替检测：任意两个工具 A↔B 交替 3 个周期（6 步）
+        if len(history) >= 6:
+            recent6 = [h.get("tool") for h in history[-6:]]
+            a, b = recent6[0], recent6[1]
+            if a != b and recent6 == [a, b, a, b, a, b]:
+                return (
+                    f"{a} 和 {b} 已交替循环 3 轮。"
+                    "不要再继续这个循环，使用已有数据进入下一阶段（制图/输出）。你必须立即返回 final。"
+                )
 
         return ""
 
@@ -70,7 +122,9 @@ class SafetyGuard:
         """判断是否应在 final 前自动生成专题图"""
         if not history:
             return False
-        data_producers = {"run_lst", "gee_compute_lst", "gee_download_monthly_lst"}
+        data_producers = {"run_lst", "gee_compute_lst", "gee_download_monthly_lst",
+                         "gee_download_yearly_lst", "gee_download_multi_year_lst",
+                         "gee_download_landsat_sca"}
         map_tools = {
             "make_thematic_map", "generate_web_map", "classify_map",
             "gee_lst_timelapse", "gee_lst_timelapse_local",
@@ -105,7 +159,7 @@ def has_timelapse_intent(text: str) -> bool:
             return True
     if re.search(r"对比.*\d{4}.*\d{4}", text):
         return True
-    if re.search(r"\d{4}\s*[-到至]\s*\d{4}", text) and any(
+    if re.search(r"\d{4}\s*[-到至]\s*\d{4}") and any(
         k in text for k in ["变化", "可视化", "分析"]
     ):
         return True
