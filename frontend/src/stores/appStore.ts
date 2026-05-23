@@ -3,7 +3,7 @@
  */
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import type { Conversation, SSEEvent, Task, User } from '../types'
+import type { Conversation, OutputFile, SSEEvent, Task, User } from '../types'
 import { authService } from '../services/auth'
 import { conversationsService } from '../services/conversations'
 import { connectSSE } from '../services/sse'
@@ -11,18 +11,12 @@ import { tasksService } from '../services/tasks'
 
 export interface Message {
   id: string
-  role: 'user' | 'assistant' | 'system'
+  role: 'user' | 'assistant' | 'system' | 'tool_call' | 'tool_result'
   content: string
   timestamp: string
   taskId?: number
-}
-
-export interface OutputFile {
-  name: string
-  path: string
-  relative_path?: string
-  size: number
-  modified: string
+  tool_name?: string
+  tool_result?: Record<string, unknown>
 }
 
 interface AppState {
@@ -103,6 +97,40 @@ interface AppState {
   deleteConversation: (id: number) => Promise<void>
   setStreamingStatus: (status: Partial<AppState['streamingStatus']>) => void
   cancelSSE: () => void
+}
+
+function extractOutputFiles(result: Record<string, unknown> | undefined): OutputFile[] {
+  if (!result || result.success === false) return []
+  const seen = new Set<string>()
+  const files: OutputFile[] = []
+  const addFile = (name: string, path: string, size?: number, modified?: string) => {
+    // 用文件名作为去重 key（同一文件不应因路径格式差异而重复）
+    const key = name
+    if (seen.has(key)) return
+    seen.add(key)
+    files.push({ name, path, size: size || 0, modified: modified || new Date().toISOString() })
+  }
+  for (const key of ['output_png', 'output_tif', 'output_gif', 'output_html', 'output_csv']) {
+    const path = result[key]
+    if (typeof path === 'string' && path) {
+      const name = path.replace(/\\/g, '/').split('/').pop() || path
+      addFile(name, path)
+    }
+  }
+  const of = result.output_files
+  if (Array.isArray(of)) {
+    for (const f of of) {
+      if (f && typeof f === 'object' && (f as Record<string, unknown>).name) {
+        addFile(
+          String((f as Record<string, unknown>).name),
+          String((f as Record<string, unknown>).path || (f as Record<string, unknown>).name),
+          Number((f as Record<string, unknown>).size || 0),
+          String((f as Record<string, unknown>).modified || new Date().toISOString()),
+        )
+      }
+    }
+  }
+  return files
 }
 
 const SYSTEM_MSG: Message = {
@@ -226,7 +254,17 @@ export const useAppStore = create<AppState>()(
 
         // 如果没有活跃会话，自动创建一个
         if (!convId) {
-          convId = await get().createConversation(content.slice(0, 50))
+          try {
+            convId = await get().createConversation(content.slice(0, 50))
+          } catch {
+            get().addMessage({ role: 'system', content: '创建会话失败，请检查后端服务是否运行。' })
+            return
+          }
+        }
+
+        if (!convId || convId <= 0) {
+          get().addMessage({ role: 'system', content: '会话 ID 无效，请刷新页面后重试。' })
+          return
         }
 
         // 添加用户消息
@@ -272,11 +310,32 @@ export const useAppStore = create<AppState>()(
                 const result = event.data.result as Record<string, unknown>
                 const ok = result?.success !== false
                 const toolName = event.data.tool as string
+                const uiAction = event.data.ui_action as string || 'NONE'
+
+                // 提取输出文件（按 name 去重，避免路径格式差异导致重复）
+                const files = extractOutputFiles(result)
+                if (files.length > 0) {
+                  const newNames = new Set(files.map(f => f.name))
+                  set(s => ({
+                    currentOutput: [
+                      ...s.currentOutput.filter(existing => !newNames.has(existing.name)),
+                      ...files,
+                    ],
+                  }))
+                }
+
+                // 根据 ui_action 自动设置预览
+                if (files.length > 0 && uiAction !== 'NONE') {
+                  set({ previewFile: files[0] })
+                }
+
                 get().addMessage({
-                  role: ok ? 'system' : 'system',
+                  role: 'tool_result',
                   content: ok
-                    ? `✓ ${toolName} 执行成功`
+                    ? `✓ ${toolName} 执行成功: ${result?.message || ''}`
                     : `✗ ${toolName} 执行失败: ${result?.message || ''}`,
+                  tool_name: toolName,
+                  tool_result: result,
                   taskId: s.activeTaskId ?? undefined,
                 })
                 break
@@ -314,6 +373,14 @@ export const useAppStore = create<AppState>()(
                 break
             }
           },
+          onRetry: (attempt, delay) => {
+            set({
+              streamingStatus: {
+                phase: 'executing',
+                reason: `连接中断，${delay / 1000}秒后重试 (${attempt}/3)...`,
+              },
+            })
+          },
           onError: (error) => {
             get().addMessage({
               role: 'system',
@@ -326,7 +393,6 @@ export const useAppStore = create<AppState>()(
             })
           },
           onDone: () => {
-            // 刷新会话列表
             get().fetchConversations(true)
           },
         })
@@ -338,6 +404,11 @@ export const useAppStore = create<AppState>()(
         if (!silent) set({ isLoadingConversations: true })
         try {
           const result = await conversationsService.getConversations()
+          const s = get()
+          // 如果 localStorage 中残留的 convId 不在服务端列表中，清除它
+          if (s.activeConversationId && !result.conversations.some(c => c.id === s.activeConversationId)) {
+            set({ activeConversationId: null })
+          }
           set({ conversations: result.conversations, isLoadingConversations: false })
         } catch {
           set({ isLoadingConversations: false })
@@ -345,19 +416,23 @@ export const useAppStore = create<AppState>()(
       },
 
       loadConversation: async (id) => {
-        set({ activeConversationId: id })
+        set({ activeConversationId: id, currentOutput: [], previousOutput: [], previewFile: null })
         try {
           const result = await conversationsService.getMessages(id, { limit: 100 })
           const msgs = result.messages.map(m => ({
             id: m.id.toString(),
-            role: (m.role === 'assistant' || m.role === 'system' || m.role === 'user'
+            role: (['user', 'assistant', 'tool_call', 'tool_result'].includes(m.role)
               ? m.role : 'system') as Message['role'],
             content: m.content,
             timestamp: m.created_at,
+            tool_name: m.tool_name,
+            tool_result: m.tool_result,
           }))
           if (msgs.length > 0) {
             set({
-              messages: [SYSTEM_MSG, ...msgs.filter(m => m.role !== 'system')],
+              messages: [SYSTEM_MSG, ...msgs.filter(m =>
+                m.role !== 'system' || m.content?.startsWith('错误')
+              )],
             })
           }
         } catch {

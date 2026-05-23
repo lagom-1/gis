@@ -3,6 +3,7 @@
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any, Dict
 
@@ -34,6 +35,12 @@ class _AnalysisBase(BaseTool):
 class StatisticsTool(_AnalysisBase):
     def execute(self, tif_path=None) -> Dict[str, Any]:
         tif = self._get_tif(tif_path)
+        if not tif:
+            # 智能兜底：扫描会话目录找最近的 TIF
+            import glob as _glob
+            candidates = sorted(_glob.glob(str(self.runtime.session_dir / "*.tif")), key=os.path.getmtime, reverse=True)
+            if candidates:
+                tif = candidates[0]
         if not tif:
             return {"success": False, "message": "没有可用栅格"}
         from gis.statistics import analyze_raster

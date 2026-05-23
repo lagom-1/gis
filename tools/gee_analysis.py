@@ -94,15 +94,22 @@ class DynamicWorldTool(BaseTool):
         ee_geom, err2 = _resolve_roi(self.runtime, {})
         if err2:
             return err2
-        from gis.dynamic_world import dynamic_world_landcover
         name = self.runtime.last_region_name or "dw"
         tif_path = str(_out_dir() / f"{name}_dynamic_world.tif")
         png_path = str(_out_dir() / f"{name}_dynamic_world.png")
-        result = dynamic_world_landcover(
-            region=ee_geom, start_date=start_date, end_date=end_date,
-            output_tif=tif_path, output_png=png_path,
-            return_type=return_type, scale=int(scale), title=title,
-        )
+        try:
+            from gis.dynamic_world import dynamic_world_landcover
+            result = dynamic_world_landcover(
+                region=ee_geom, start_date=start_date, end_date=end_date,
+                output_tif=tif_path, output_png=png_path,
+                return_type=return_type, scale=int(scale), title=title,
+            )
+        except Exception as e:
+            msg = str(e)
+            return {
+                "success": False,
+                "message": f"GEE Dynamic World 不可用（{msg[:100]}）。建议改用本地工具：classify_map 或 ee_unsupervised_classify 对已有数据进行分类。不要重试 dynamic_world_landcover！",
+            }
         if result.get("success"):
             self.runtime.last_tif_output = result.get("output_tif")
             self.runtime.last_output = result.get("output_png")

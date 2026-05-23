@@ -1,6 +1,7 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import {
   ImageIcon, Film, FileText, Table2, Maximize2, X, Columns2, Download,
+  ArrowLeftRight,
 } from 'lucide-react'
 import type { OutputFile } from '../../types/conversation'
 import ViewerRouter from '../ViewerRouter'
@@ -34,29 +35,33 @@ function TabIcon({ cat }: { cat: string }) {
   }
 }
 
-/**
- * 将后端返回的文件路径转换为前端可访问的 URL。
- * 路径示例: D:\opengis\workspace\outputs\旺苍县_2026年1月_LST_map.png
- * 转换为: /outputs/%E6%97%BA%E8%8B%8D%E5%8E%BF_2026%E5%B9%B41%E6%9C%88_LST_map.png
- */
+// ── 友好文件名解析 ──
+function friendlyName(f: OutputFile): string {
+  const name = f.name.replace(/\.(png|jpg|jpeg|tif|tiff)$/i, '')
+  // 尝试提取 _YYYY_MM_ 模式
+  const m = name.match(/_(\d{4})_(\d{2})_/)
+  if (m) return `${m[1]}年${m[2]}月 专题图`
+  // 尝试提取 _YYYY年M月_ 模式
+  const m2 = name.match(/_(\d{4})年(\d{1,2})月/)
+  if (m2) return `${m2[1]}年${m2[2]}月 专题图`
+  return name.length > 20 ? name.slice(0, 18) + '...' : name
+}
+
+// ── 文件路径 → URL ──
 function buildFileUrl(f: OutputFile): string {
-  // 优先使用 relative_path，其次从绝对路径中提取 /outputs/ 之后的相对路径
   const raw = (f as any).relative_path || f.path || f.name
   const normalized = raw.replace(/\\/g, '/')
-  // 处理已经是 /outputs/... 或以 outputs/ 开头的路径
   if (normalized.startsWith('/outputs/')) {
     return normalized.split('/').map(encodeURIComponent).join('/')
   }
   if (normalized.startsWith('outputs/')) {
     return '/' + normalized.split('/').map(encodeURIComponent).join('/')
   }
-  // 从绝对路径中提取 /outputs/ 之后的部分 (使用 indexOf 找到第一个匹配)
   const idx = normalized.indexOf('/outputs/')
   if (idx >= 0) {
-    const rel = normalized.slice(idx + 1) // "outputs/..."
+    const rel = normalized.slice(idx + 1)
     return '/' + rel.split('/').map(encodeURIComponent).join('/')
   }
-  // 回退：假设文件在 outputs 根目录下
   return '/outputs/' + encodeURIComponent(f.name)
 }
 
@@ -65,13 +70,47 @@ export function CanvasPanel({ files, onFileClick }: Props) {
   const [compareMode, setCompareMode] = useState(false)
   const [lightbox, setLightbox] = useState(false)
 
-  // 可对比的图片文件（排除 GIF/CSV/HTML）
+  // 可对比的图片文件
   const comparableImages = useMemo(
     () => files.filter(f => getCategory(f.name) === 'image'),
     [files],
   )
 
-  // 自动选择最新文件为激活，优先选浏览器可查看的图片（PNG/JPG），跳过 TIF
+  // 卷帘对比的左右选中文件（用 name 做 key）
+  const [leftFile, setLeftFileRaw] = useState<OutputFile | null>(null)
+  const [rightFile, setRightFileRaw] = useState<OutputFile | null>(null)
+
+  // 包装 setter：同时根据 name 在 files 中查找最新引用
+  const setLeftFile = useCallback((f: OutputFile | null) => {
+    if (!f) { setLeftFileRaw(null); return }
+    const latest = files.find(x => x.name === f.name)
+    setLeftFileRaw(latest || f)
+  }, [files])
+  const setRightFile = useCallback((f: OutputFile | null) => {
+    if (!f) { setRightFileRaw(null); return }
+    const latest = files.find(x => x.name === f.name)
+    setRightFileRaw(latest || f)
+  }, [files])
+
+  // 进入对比模式时自动初始化左右文件为最后两个
+  useEffect(() => {
+    if (compareMode && comparableImages.length >= 2) {
+      const len = comparableImages.length
+      // 只在首次进入（leftFile/rightFile 为空）时自动设置
+      setLeftFileRaw(prev => prev || comparableImages[len - 2])
+      setRightFileRaw(prev => prev || comparableImages[len - 1])
+    }
+  }, [compareMode, comparableImages])
+
+  // 退出对比时重置
+  useEffect(() => {
+    if (!compareMode) {
+      setLeftFileRaw(null)
+      setRightFileRaw(null)
+    }
+  }, [compareMode])
+
+  // 自动选择最新文件为激活
   useEffect(() => {
     if (files.length === 0) {
       setActiveFile(null)
@@ -80,7 +119,6 @@ export function CanvasPanel({ files, onFileClick }: Props) {
     }
     setActiveFile(prev => {
       if (prev && files.some(f => f.name === prev.name)) return prev
-      // 优先选浏览器可查看的图片
       const img = files.find(f => isBrowserViewable(f.name))
       return img || files[files.length - 1]
     })
@@ -101,44 +139,89 @@ export function CanvasPanel({ files, onFileClick }: Props) {
     )
   }
 
-  // 卷帘对比模式
+  // ── 卷帘对比模式 ──
   if (compareMode && comparableImages.length >= 2) {
-    const latest = comparableImages[comparableImages.length - 1]
-    const previous = comparableImages[comparableImages.length - 2]
+    const left = leftFile || comparableImages[comparableImages.length - 2]
+    const right = rightFile || comparableImages[comparableImages.length - 1]
+    const leftUrl = getUrl(left)
+    const rightUrl = getUrl(right)
+    const leftName = friendlyName(left)
+    const rightName = friendlyName(right)
+
     return (
       <div className="flex flex-col flex-1 min-h-0 bg-white">
-        <div className="flex items-center justify-between px-3 py-2 border-b border-gray-100">
-          <div className="flex items-center gap-2">
-            <Columns2 className="h-3.5 w-3.5 text-blue-500" />
-            <span className="text-xs font-medium text-gray-600">卷帘对比</span>
+        {/* 工具栏：双下拉 + 退出 */}
+        <div className="flex items-center justify-between px-2 py-1.5 border-b border-gray-100 gap-1.5 flex-wrap">
+          <div className="flex items-center gap-1.5 flex-1 min-w-0">
+            <Columns2 className="h-3.5 w-3.5 text-blue-500 flex-shrink-0" />
+            <span className="text-xs font-medium text-gray-600 flex-shrink-0">对比</span>
+
+            {/* 左图下拉 */}
+            <div className="flex items-center gap-1">
+              <span className="text-[10px] text-gray-400 flex-shrink-0">左</span>
+              <select
+                value={left.name}
+                onChange={e => {
+                  const f = comparableImages.find(x => x.name === e.target.value)
+                  if (f) setLeftFile(f)
+                }}
+                className="text-[11px] border border-gray-200 rounded px-1.5 py-0.5 bg-white text-gray-700 max-w-[130px] truncate focus:outline-none focus:border-blue-300"
+              >
+                {comparableImages.map(f => (
+                  <option key={f.name} value={f.name}>{friendlyName(f)}</option>
+                ))}
+              </select>
+            </div>
+
+            <ArrowLeftRight className="h-3 w-3 text-gray-300 flex-shrink-0" />
+
+            {/* 右图下拉 */}
+            <div className="flex items-center gap-1">
+              <span className="text-[10px] text-gray-400 flex-shrink-0">右</span>
+              <select
+                value={right.name}
+                onChange={e => {
+                  const f = comparableImages.find(x => x.name === e.target.value)
+                  if (f) setRightFile(f)
+                }}
+                className="text-[11px] border border-gray-200 rounded px-1.5 py-0.5 bg-white text-gray-700 max-w-[130px] truncate focus:outline-none focus:border-blue-300"
+              >
+                {comparableImages.map(f => (
+                  <option key={f.name} value={f.name}>{friendlyName(f)}</option>
+                ))}
+              </select>
+            </div>
           </div>
-          <div className="flex items-center gap-1">
-            <button
-              onClick={() => setCompareMode(false)}
-              className="px-2 py-1 text-xs text-gray-500 hover:text-gray-700 rounded transition-colors"
-            >
-              退出对比
-            </button>
-          </div>
+
+          <button
+            onClick={() => setCompareMode(false)}
+            className="px-2 py-1 text-xs text-gray-500 hover:text-gray-700 rounded transition-colors flex-shrink-0"
+          >
+            退出对比
+          </button>
         </div>
+
+        {/* 卷帘画布 */}
         <div className="flex-1 min-h-0">
           <CompareSlider
-            srcBefore={getUrl(previous)}
-            srcAfter={getUrl(latest)}
-            labelBefore={previous.name}
-            labelAfter={latest.name}
+            srcBefore={leftUrl}
+            srcAfter={rightUrl}
+            labelBefore={leftName}
+            labelAfter={rightName}
           />
         </div>
+
+        {/* 底部文件名 */}
         <div className="px-3 py-1.5 border-t border-gray-100 flex items-center gap-3 text-xs text-gray-400">
-          <span className="truncate">← {previous.name}</span>
+          <span className="truncate">← {leftName}</span>
           <span className="flex-shrink-0">|</span>
-          <span className="truncate">{latest.name} →</span>
+          <span className="truncate">{rightName} →</span>
         </div>
       </div>
     )
   }
 
-  // 常规单文件预览模式
+  // ── 常规单文件预览模式 ──
   const cat = activeFile ? getCategory(activeFile.name) : 'image'
   const activeUrl = activeFile ? getUrl(activeFile) : ''
 
@@ -192,7 +275,7 @@ export function CanvasPanel({ files, onFileClick }: Props) {
           const isActive = activeFile?.name === f.name
           return (
             <button
-              key={f.name}
+              key={f.path || f.name}
               onClick={() => { setActiveFile(f); setCompareMode(false); onFileClick?.(f) }}
               className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs whitespace-nowrap transition-colors flex-shrink-0 ${
                 isActive
@@ -207,7 +290,7 @@ export function CanvasPanel({ files, onFileClick }: Props) {
         })}
       </div>
 
-      {/* 画布查看区 — relative 定位容器，flex-1 min-h-0 拉伸填满剩余空间 */}
+      {/* 画布查看区 */}
       <div className="flex-1 min-h-0 bg-gray-100 relative overflow-hidden">
         {activeFile && (
           <ViewerRouter

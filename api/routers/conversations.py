@@ -213,7 +213,9 @@ async def send_message(
     """
     conv = get_conversation(db, conv_id)
     if not conv:
-        raise HTTPException(status_code=404, detail="会话不存在")
+        from api.services.conversation_service import create_conversation
+        conv = create_conversation(db, current_user.id, request.content[:50])
+        conv_id = conv.id
     if conv.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="无权操作此会话")
 
@@ -234,17 +236,16 @@ async def send_message(
         for m in get_conversation_messages(db, conv_id, limit=100)
     ]
 
-    # 4. 执行 ConversationalAgent
-    from agent.tool_registry import ToolRegistry
-    from agent.tool import GISRuntime, register_tools
+    # 4. 执行 Agent
+    from tools import ToolRegistry
+    from tools.runtime import GISRuntime
     from agent.llm import LLMClient
     from agent.engine import AgentLoop
 
-    runtime = GISRuntime()
+    runtime = GISRuntime(conversation_id=conv_id)
     if saved_state:
         runtime.from_dict(saved_state)
-    registry = ToolRegistry()
-    register_tools(registry, runtime, {})
+    registry = ToolRegistry(runtime)
     llm = LLMClient()
     agent = AgentLoop(llm, registry, runtime)
 
@@ -344,7 +345,10 @@ async def send_message_stream(
     """
     conv = get_conversation(db, conv_id)
     if not conv:
-        raise HTTPException(status_code=404, detail="会话不存在")
+        # 会话不存在 → 自动创建新会话（服务重启后前端可能持有旧 ID）
+        from api.services.conversation_service import create_conversation
+        conv = create_conversation(db, current_user.id, request.content[:50])
+        conv_id = conv.id
     if conv.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="无权操作此会话")
 
@@ -364,16 +368,15 @@ async def send_message_stream(
         for m in get_conversation_messages(db, conv_id, limit=100)
     ]
 
-    from agent.tool_registry import ToolRegistry
-    from agent.tool import GISRuntime, register_tools
+    from tools import ToolRegistry
+    from tools.runtime import GISRuntime
     from agent.llm import LLMClient
     from agent.engine import AgentLoop
 
-    runtime = GISRuntime()
+    runtime = GISRuntime(conversation_id=conv_id)
     if saved_state:
         runtime.from_dict(saved_state)
-    registry = ToolRegistry()
-    register_tools(registry, runtime, {})
+    registry = ToolRegistry(runtime)
     llm = LLMClient()
     agent = AgentLoop(llm, registry, runtime)
 
@@ -438,9 +441,9 @@ async def send_message_stream(
         last_heartbeat = time.time()
 
         while not future.done() or events:
-            # 每 30 秒发送心跳，保持 SSE 连接活跃
+            # 每 15 秒发送心跳，防止代理/网关因长时间无数据断开连接
             now = time.time()
-            if now - last_heartbeat > 30:
+            if now - last_heartbeat > 15:
                 last_heartbeat = now
                 yield f": heartbeat\n\n"
 

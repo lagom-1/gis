@@ -5,6 +5,7 @@
 
 import fnmatch
 import os
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -42,13 +43,29 @@ def find_local_files(
     results: List[Dict[str, Any]] = []
 
     def _match(name: str) -> bool:
-        """检查文件名是否匹配查询"""
+        """检查文件名是否匹配查询（支持无分隔符模糊匹配）"""
         hay = name.lower()
         if not query:
             return True
         if query in hay or fnmatch.fnmatch(hay, f"*{query}*"):
             return True
         if query_tokens and all(tok in hay for tok in query_tokens):
+            return True
+        # 归一化匹配：去掉分隔符、空格和中文字符后再比较
+        hay_norm = re.sub(r'[_\- ]', '', hay)
+        query_norm = re.sub(r'[_\- 年月日]', '', query)
+        if query_norm and query_norm in hay_norm:
+            return True
+        # 零填充匹配: "1月" → "01", "2月" → "02"
+        zp_query = query
+        for m in re.finditer(r'(\d{1,2})\s*月', query):
+            zp_query = zp_query.replace(m.group(0), m.group(1).zfill(2))
+        zp_query_norm = re.sub(r'[_\- 年月日]', '', zp_query)
+        if zp_query_norm and zp_query_norm in hay_norm:
+            return True
+        # 匹配: 提取区域名（去除数字和年月后）在文件名中
+        region_part = re.sub(r'[\d年月日]', '', query).replace('_', '').replace(' ', '')
+        if len(region_part) >= 2 and region_part in hay.replace('_', '').replace(' ', ''):
             return True
         return False
 
@@ -137,7 +154,15 @@ def find_local_files(
                 break
 
     results.sort(key=lambda x: (-x["score"], -x["mtime"], x["name"]))
-    results = results[:max_results]
+    # 按 path 去重（同一物理文件只保留得分最高的）
+    seen_paths = set()
+    deduped = []
+    for r in results:
+        norm_path = os.path.normpath(r["path"])
+        if norm_path not in seen_paths:
+            seen_paths.add(norm_path)
+            deduped.append(r)
+    results = deduped[:max_results]
     raster_hits = [r for r in results if r["extension"] in RASTER_EXTS]
 
     return {

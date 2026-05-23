@@ -3,6 +3,7 @@
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any, Dict
 
@@ -20,9 +21,59 @@ def _stem(path: str | None) -> str:
     return Path(path).stem if path else "result"
 
 
+def _derive_title_from_tif(tif_path: str, fallback: str = "专题图") -> str:
+    """从 TIF 文件名中提取区域、年份、月份，动态生成图面标题。
+    示例: 温江区_2026_02_lst.tif -> '温江区2026年2月地表温度(LST)'
+    """
+    fname = Path(tif_path).stem
+    # 提取区域名（第一个下划线前的部分，或第一个看起来像年份前的部分）
+    region = ""
+    year = ""
+    month = ""
+
+    # 匹配 _YYYY_MM_ 或 _YYYY年M月_ 或 _YYYY年MM月_ 模式
+    m = re.search(r'_(\d{4})[年_]?(\d{1,2})月?', fname)
+    if m and m.group(2):
+        # 验证第二个分组确实是月份（1-12）
+        mo = int(m.group(2))
+        if mo < 1 or mo > 12:
+            m = None  # 不是有效月份，回退到纯年份匹配
+    if not m:
+        m = re.search(r'_(\d{4})[年_]?(\d{2})', fname)
+    if m:
+        year = m.group(1)
+        month = m.group(2).lstrip('0')
+        region = fname[:m.start()]
+        # 清理区域名末尾的下划线
+        region = region.rstrip('_')
+    else:
+        # 单独匹配年份
+        m = re.search(r'_(\d{4})', fname)
+        if m:
+            year = m.group(1)
+            region = fname[:m.start()].rstrip('_')
+
+    # 清理区域名中的 lst/LST 后缀
+    region = re.sub(r'_?[Ll][Ss][Tt]$', '', region)
+
+    parts = []
+    if region:
+        parts.append(region)
+    if year and month:
+        parts.append(f"{year}年{month}月")
+    elif year:
+        parts.append(f"{year}年")
+
+    parts.append("LST专题图")
+    return "".join(parts) if parts else fallback
+
+
 class _VisBase(BaseTool):
     def _get_tif(self, tif_path=None) -> str | None:
         return tif_path or self.runtime.current_tif()
+
+    def _out_dir(self) -> Path:
+        return self.runtime.session_dir
 
 
 @tool(
@@ -131,15 +182,18 @@ class MakeThematicMapTool(_VisBase):
             style["colormap"] = colormap
         if title:
             style["title"] = title
+        else:
+            # 无显式标题时从 TIF 文件名动态派生，避免使用上一个月的残留标题
+            style["title"] = _derive_title_from_tif(tif)
         if legend_position:
             style["legend_position"] = legend_position
         if dpi:
             style["dpi"] = int(dpi)
 
-        output_path = kwargs.get("output_path") or str(_out_dir() / f"{_stem(tif)}_map.png")
+        output_path = kwargs.get("output_path") or str(self._out_dir() / f"{_stem(tif)}_LST专题图.png")
         result = generate_cartographic_map(
             tif_path=tif, output_path=output_path,
-            title=style.get("title", f"专题图 - {_stem(tif)}"),
+            title=style["title"],
             colormap=style.get("colormap", "coolwarm"),
             show_legend=bool(style.get("show_legend", True)),
             show_scalebar=bool(style.get("show_scalebar", True)),
@@ -172,6 +226,7 @@ class MakeThematicMapTool(_VisBase):
         )
         if result.get("success"):
             self.runtime.last_output = output_path
+            self.runtime.register_output(output_path, "image")
             self.runtime.map_style.update(style)
         return result
 

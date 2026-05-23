@@ -175,7 +175,7 @@ def get_monthly_lst_collection(
         composite = col.median().clip(roi)
         lst = _compute_lst_gee(composite)
         # 填补云掩膜造成的空洞（focal_mean radius=3, ~210m）
-        lst_filled = lst.focal_mean(radius=3, kernelType="square", units="pixels")
+        lst_filled = lst.reduceNeighborhood(reducer=ee.Reducer.mean(), kernel=ee.Kernel.square(3, "pixels"))
         lst = lst.unmask(lst_filled)
         lst = lst.set("year", year)
         lst = lst.set("month", month)

@@ -1,9 +1,6 @@
 /**
- * SSE (Server-Sent Events) 客户端
- *
- * 用于接收 ConversationalAgent 的实时执行事件流。
+ * SSE (Server-Sent Events) 客户端 — 支持指数退避重连
  */
-
 import type { SSEEvent, SSEEventType } from '../types'
 
 export interface SSEConnectOptions {
@@ -12,99 +9,129 @@ export interface SSEConnectOptions {
   onEvent: (event: SSEEvent) => void
   onError?: (error: Error) => void
   onDone?: () => void
+  onRetry?: (attempt: number, delay: number) => void
   signal?: AbortSignal
+  maxRetries?: number
 }
 
 /**
  * 连接到 SSE 端点，实时接收 Agent 执行事件。
- *
- * 返回一个 abort 函数用于取消连接。
+ * 支持指数退避自动重连（默认最多 3 次）。
+ * 返回 abort 函数用于取消连接。
  */
 export function connectSSE(options: SSEConnectOptions): () => void {
-  const { convId, content, onEvent, onError, onDone, signal } = options
+  const { convId, content, onEvent, onError, onDone, onRetry, signal, maxRetries = 3 } = options
 
+  let retryCount = 0
+  let stopped = false
   const controller = new AbortController()
 
-  // 合并外部 signal 和内部 controller
   if (signal) {
-    signal.addEventListener('abort', () => controller.abort())
+    signal.addEventListener('abort', () => { stopped = true; controller.abort() })
   }
 
-  const token = localStorage.getItem('token')
-  const url = `/api/conversations/${convId}/messages/stream`
+  function cleanup() {
+    stopped = true
+    controller.abort()
+  }
 
-  fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Accept': 'text/event-stream',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    body: JSON.stringify({ content }),
-    signal: controller.signal,
-  })
-    .then(async (response) => {
-      if (!response.ok) {
-        throw new Error(`SSE 连接失败: ${response.status} ${response.statusText}`)
-      }
+  function tryConnect() {
+    if (stopped) return
 
-      const reader = response.body?.getReader()
-      if (!reader) {
-        throw new Error('无法读取响应流')
-      }
+    const token = localStorage.getItem('token')
+    const url = `/api/conversations/${convId}/messages/stream`
 
-      const decoder = new TextDecoder()
-      let buffer = ''
+    fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'text/event-stream',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ content }),
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        // 404 不重试（会话不存在）
+        if (response.status === 404) {
+          onError?.(new Error(`会话不存在或已被删除 (404)`))
+          return
+        }
+        // 其他非 200 状态码：指数退避重试
+        if (!response.ok) {
+          throw new Error(`SSE 连接失败: ${response.status}`)
+        }
 
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
+        // 连接成功，重置重试计数
+        retryCount = 0
 
-        buffer += decoder.decode(value, { stream: true })
+        const reader = response.body?.getReader()
+        if (!reader) {
+          throw new Error('无法读取响应流')
+        }
 
-        // 解析 SSE 事件
-        const lines = buffer.split('\n')
-        buffer = lines.pop() || ''
+        const decoder = new TextDecoder()
+        let buffer = ''
 
-        let currentEventType = ''
-        let currentData = ''
+        while (true) {
+          if (stopped) { reader.cancel(); return }
+          const { done, value } = await reader.read()
+          if (done) break
 
-        for (const line of lines) {
-          if (line.startsWith('event: ')) {
-            currentEventType = line.slice(7).trim()
-          } else if (line.startsWith('data: ')) {
-            currentData = line.slice(6).trim()
-          } else if (line === '') {
-            // 空行表示一个事件结束
-            if (currentEventType && currentData) {
-              try {
-                const data = JSON.parse(currentData)
-                onEvent({
-                  type: currentEventType as SSEEventType,
-                  data,
-                })
-              } catch {
-                // 非 JSON 数据，忽略
-              }
+          buffer += decoder.decode(value, { stream: true })
 
-              if (currentEventType === 'done') {
-                onDone?.()
-                return
-              }
+          const lines = buffer.split('\n')
+          buffer = lines.pop() || ''
+
+          let currentEventType = ''
+          let currentData = ''
+
+          for (const line of lines) {
+            if (line.startsWith(': heartbeat')) {
+              // 心跳行，忽略
+              continue
             }
-            currentEventType = ''
-            currentData = ''
+            if (line.startsWith('event: ')) {
+              currentEventType = line.slice(7).trim()
+            } else if (line.startsWith('data: ')) {
+              currentData = line.slice(6).trim()
+            } else if (line === '') {
+              if (currentEventType && currentData) {
+                try {
+                  const data = JSON.parse(currentData)
+                  onEvent({ type: currentEventType as SSEEventType, data })
+                } catch { /* JSON 解析失败，忽略 */ }
+
+                if (currentEventType === 'done') {
+                  onDone?.()
+                  return
+                }
+              }
+              currentEventType = ''
+              currentData = ''
+            }
           }
         }
-      }
 
-      onDone?.()
-    })
-    .catch((err) => {
-      if ((err as Error).name === 'AbortError') return
-      onError?.(err as Error)
-    })
+        // 流自然结束
+        onDone?.()
+      })
+      .catch((err) => {
+        if ((err as Error).name === 'AbortError' || stopped) return
 
-  // 返回 abort 函数
-  return () => controller.abort()
+        // 指数退避重试
+        if (retryCount < maxRetries) {
+          retryCount++
+          const delay = Math.min(1000 * Math.pow(2, retryCount), 10000) // 2s, 4s, 8s, max 10s
+          onRetry?.(retryCount, delay)
+          setTimeout(tryConnect, delay)
+        } else {
+          onError?.(err as Error)
+        }
+      })
+  }
+
+  tryConnect()
+
+  return cleanup
 }

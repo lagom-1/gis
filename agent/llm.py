@@ -141,27 +141,58 @@ class LLMClient:
 
         input_str = json.dumps(payload, ensure_ascii=False)
 
-        # 最多尝试 2 次，指数退避：1s
+        # ── 上下文倾倒：第一次调用时保存完整 prompt ──
+        step = payload.get("step", 0)
+        if step == 1:
+            try:
+                dump = {"system": system_prompt, "payload": payload}
+                with open("debug_raw_prompt.json", "w", encoding="utf-8") as f:
+                    json.dump(dump, f, ensure_ascii=False, indent=2)
+                print(f"\n{'='*60}\n[Prompt Dump] 已将大模型开局上下文全量导出至 debug_raw_prompt.json\n{'='*60}\n")
+            except Exception:
+                pass
+
+        # 最多尝试 2 次 + 1 次驳回重试，指数退避：1s
         last_text = None
-        for attempt in range(2):
+        rejection_used = False
+        for attempt in range(3):
             try:
                 raw = chain.invoke({"input": input_str})
                 text = self._strip_fences(raw)
                 last_text = text
                 result = _try_parse_json(text)
                 if result is not None:
+                    # ── 【白卷拦截】第一步就 final 且无输出 → 拒绝（仅一次） ──
+                    if (not rejection_used
+                            and result.get("type") == "final"
+                            and payload.get("output_count", 0) == 0
+                            and payload.get("last_result") is None):
+                        rejection_used = True
+                        print(f"[LLM] ⛔ 检测到开局白卷 final！注入系统驳回消息并强制重试...")
+                        payload["rejection_notice"] = (
+                            "【系统拒绝】警告！这是当前对话的第一轮，你尚未调用任何 GIS 遥感工具"
+                            "（如下载、搜索或分类），严禁直接返回 final 宣称任务完成！"
+                            "请立刻给出第一步需要调用的具体工具 JSON！"
+                        )
+                        input_str = json.dumps(payload, ensure_ascii=False)
+                        continue
                     return result
-                print(f"[LLM] JSON 解析失败 (attempt {attempt+1}): {text[:150]}...")
+                print(f"[LLM] JSON 解析失败 (attempt {attempt+1}): {text[:200]}...")
             except Exception as e:
                 print(f"[LLM] LLM 调用异常 (attempt {attempt+1}): {e}")
+                import traceback
+                traceback.print_exc()
 
-            if attempt < 1:
+            if attempt < 2:
                 time.sleep(1)
 
-        # 优雅降级：将 LLM 文本响应包装为 final 决策
-        fallback_text = (last_text or "任务处理中，请重新描述你的需求。")[:800]
-        print(f"[LLM] JSON 解析全部失败，降级为 final_answer: {fallback_text[:100]}...")
-        return {"type": "final", "answer": fallback_text}
+        # 不降级为 final——而是抛出 RuntimeError 让引擎重试
+        if last_text:
+            msg = f"LLM 返回了无法解析的响应: {last_text[:200]}"
+        else:
+            msg = "LLM 未返回任何响应，请检查 API Key 和网络连接。"
+        print(f"[LLM] JSON 解析全部失败: {msg}")
+        raise RuntimeError(msg)
 
     def invoke_text(self, system_prompt: str, user_msg: str) -> str:
         """调用 LLM 返回纯文本"""

@@ -27,6 +27,17 @@ for _d in [WORKSPACE_DIR, RUNS_DIR, OUTPUTS_DIR]:
     _d.mkdir(parents=True, exist_ok=True)
 
 
+def normalize_output_path(absolute_path: str) -> str:
+    """将绝对路径标准化为相对于 OUTPUTS_DIR 的 /outputs/ URL 路径"""
+    try:
+        p = Path(absolute_path).resolve()
+        base = OUTPUTS_DIR.resolve()
+        rel = p.relative_to(base)
+        return "/outputs/" + str(rel).replace("\\", "/")
+    except (ValueError, OSError):
+        return absolute_path.replace("\\", "/")
+
+
 # ── 常见搜索根目录 ──────────────────────────────────────
 def default_search_roots():
     """返回用户电脑上的常见文件搜索路径"""

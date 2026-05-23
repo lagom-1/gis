@@ -175,12 +175,18 @@ def _execute_gis_task(task_id: int, input_text: str, celery_task_id: str = None)
 
         import config as app_config
 
-        from agent.core import GISAgent
+        from agent.engine import AgentLoop
+        from agent.llm import LLMClient
+        from tools import ToolRegistry
+        from tools.runtime import GISRuntime
 
-        agent = GISAgent(max_steps=25)
+        llm = LLMClient()
+        runtime = GISRuntime()
+        registry = ToolRegistry(runtime)
+        agent = AgentLoop(llm, registry, runtime)
 
-        def _on_progress(step: int, tool: str):
-            _update_task_status(task_id, "running", current_step=step, step_description=tool)
+        def _on_progress(step: int, tool: str, detail: str = ""):
+            _update_task_status(task_id, "running", current_step=step, step_description=detail or tool)
 
         result = agent.run(input_text, progress_callback=_on_progress)
 

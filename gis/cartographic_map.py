@@ -647,7 +647,8 @@ def generate_cartographic_map(
         )
 
         if output_path is None:
-            output_path = os.path.join(os.path.dirname(tif_path), "cartographic_map.png")
+            stem = os.path.splitext(os.path.basename(tif_path))[0]
+            output_path = os.path.join(os.path.dirname(tif_path), f"{stem}_LST专题图.png")
         fig.savefig(output_path, dpi=int(dpi), bbox_inches="tight", facecolor=fig.get_facecolor())
         plt.close(fig)
         return {

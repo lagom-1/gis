@@ -928,7 +928,7 @@ def gee_download_landsat_sca(
         filled_bands = []
         for band_name in ["SR_B4", "SR_B5", "ST_B10"]:
             band = image.select(band_name)
-            filled = band.focal_mean(radius=3, kernelType="square", units="pixels")
+            filled = band.reduceNeighborhood(reducer=ee.Reducer.mean(), kernel=ee.Kernel.square(3, "pixels"))
             band = band.unmask(filled)
             filled_bands.append(band)
 
@@ -1205,7 +1205,7 @@ def gee_download_monthly_lst(
             method_desc = f"逐景SCA反演→中值（{selected_count}景）"
 
         # ── 4. 填补边缘空洞 ────────────────────────────────
-        filled = monthly_lst.focal_mean(radius=3, kernelType="square", units="pixels")
+        filled = monthly_lst.reduceNeighborhood(reducer=ee.Reducer.mean(), kernel=ee.Kernel.square(3, "pixels"))
         monthly_lst = monthly_lst.unmask(filled).clip(geom)
 
         export_img = monthly_lst.rename("LST")
@@ -1459,7 +1459,7 @@ def gee_download_yearly_lst(
                 else:
                     monthly_lst = lst_col.median().clip(geom)
 
-                filled = monthly_lst.focal_mean(radius=3, kernelType="square", units="pixels")
+                filled = monthly_lst.reduceNeighborhood(reducer=ee.Reducer.mean(), kernel=ee.Kernel.square(3, "pixels"))
                 monthly_lst = monthly_lst.unmask(filled).clip(geom)
                 export_img = monthly_lst.rename("LST")
 
@@ -1713,7 +1713,7 @@ def gee_download_multi_year_lst(
                 else:
                     monthly_lst = lst_col.median().clip(geom)
 
-                filled = monthly_lst.focal_mean(radius=3, kernelType="square", units="pixels")
+                filled = monthly_lst.reduceNeighborhood(reducer=ee.Reducer.mean(), kernel=ee.Kernel.square(3, "pixels"))
                 monthly_lst = monthly_lst.unmask(filled).clip(geom)
                 export_img = monthly_lst.rename("LST")
 

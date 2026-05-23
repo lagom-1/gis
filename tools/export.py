@@ -3,6 +3,7 @@
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any, Dict
 
@@ -73,7 +74,15 @@ class GenerateReportTool(BaseTool):
                     })
 
         if not items:
+            # 智能兜底：扫描会话目录找 TIF，隐式调用统计
+            import glob as _glob
+            session_tifs = sorted(
+                _glob.glob(str(self.runtime.session_dir / "*.tif")),
+                key=os.path.getmtime, reverse=True
+            )
             tif = self.runtime.current_tif()
+            if not tif and session_tifs:
+                tif = session_tifs[0]
             if tif:
                 try:
                     from gis.statistics import analyze_raster
@@ -88,16 +97,23 @@ class GenerateReportTool(BaseTool):
                         })
                 except Exception:
                     pass
+            # 收集已有 PNG 文件
             if self.runtime.last_output and self.runtime.last_output.endswith(('.png', '.jpg')):
                 items.append({
-                    "section_title": "专题图",
-                    "item_type": "map",
-                    "image_path": self.runtime.last_output,
-                    "image_caption": dataset_name,
+                    "section_title": "专题图", "item_type": "map",
+                    "image_path": self.runtime.last_output, "image_caption": dataset_name,
                 })
+            for f in self.runtime.output_files:
+                if f.get("name", "").endswith(('.png', '.jpg')) and not any(
+                    i.get("image_path") == f.get("path") for i in items
+                ):
+                    items.append({
+                        "section_title": "", "item_type": "map",
+                        "image_path": f["path"], "image_caption": f["name"],
+                    })
 
         if not items:
-            return {"success": False, "message": "没有可用的分析结果来生成报告。请先执行统计分析、分类或制图等操作。"}
+            return {"success": False, "message": "没有可用的分析结果来生成报告。"}
 
         output_path = str(_out_dir() / f"{dataset_name}_experiment_report.html")
         result = generate_html_report(
