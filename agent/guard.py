@@ -11,8 +11,8 @@ from typing import Any, Dict, List, Optional
 class SafetyGuard:
     """Agent 安全守卫：循环检测 + 自动出图判断"""
 
-    def __init__(self, max_map_calls=2, max_style_calls=2, max_consecutive_same=3,
-                 max_download_calls=5, max_set_dataset_calls=4):
+    def __init__(self, max_map_calls=15, max_style_calls=2, max_consecutive_same=3,
+                 max_download_calls=5, max_set_dataset_calls=15):
         self.max_map_calls = max_map_calls
         self.max_style_calls = max_style_calls
         self.max_consecutive_same = max_consecutive_same
@@ -106,15 +106,21 @@ class SafetyGuard:
             if recent == ["set_map_style", "make_thematic_map", "set_map_style", "make_thematic_map"]:
                 return "set_map_style 和 make_thematic_map 已交替循环。你必须立即返回 final。"
 
-        # 通用交替检测：任意两个工具 A↔B 交替 3 个周期（6 步）
-        if len(history) >= 6:
-            recent6 = [h.get("tool") for h in history[-6:]]
-            a, b = recent6[0], recent6[1]
-            if a != b and recent6 == [a, b, a, b, a, b]:
-                return (
-                    f"{a} 和 {b} 已交替循环 3 轮。"
-                    "不要再继续这个循环，使用已有数据进入下一阶段（制图/输出）。你必须立即返回 final。"
-                )
+        # 通用交替检测：任意两个工具 A↔B 交替 6 个周期（12 步）
+        # 注意：set_current_dataset + make_thematic_map 是批量制图的正常模式，
+        # 不计入交替检测（通过 _BATCH_PATTERN 排除）
+        if len(history) >= 12:
+            recent12 = [h.get("tool") for h in history[-12:]]
+            a, b = recent12[0], recent12[1]
+            if a != b and recent12 == [a, b, a, b, a, b, a, b, a, b, a, b]:
+                # 排除批量制图的合法交替模式
+                if {a, b} == {"set_current_dataset", "make_thematic_map"}:
+                    pass  # 批量制图允许更多轮交替
+                else:
+                    return (
+                        f"{a} 和 {b} 已交替循环 6 轮。"
+                        "不要再继续这个循环，使用已有数据进入下一阶段（制图/输出）。你必须立即返回 final。"
+                    )
 
         return ""
 

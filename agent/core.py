@@ -667,10 +667,9 @@ class GISAgent:
             )
 
         map_calls = [h for h in history if h["tool"] == "make_thematic_map"]
-        if len(map_calls) >= 2:
+        if len(map_calls) >= 15:
             return (
-                "警告：同一轮对话中 make_thematic_map 已调用多次。"
-                "出图一次就够了。"
+                "警告：同一轮对话中 make_thematic_map 已调用超过 15 次。"
                 "你必须立即返回 final，把当前结果告诉用户。"
             )
 

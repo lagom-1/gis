@@ -84,9 +84,9 @@ class AgentLoop:
                     "answer": "当前数据集已经是目标文件，无需重复切换。如需对此数据制图，请直接调用 make_thematic_map。",
                 }
 
-        # set_current_dataset 调用超过 4 次 → 提示制图
+        # set_current_dataset 调用超过限制 → 提示制图
         set_calls = [h for h in history if h.get("tool") == "set_current_dataset"]
-        if tool == "set_current_dataset" and len(set_calls) >= 4:
+        if tool == "set_current_dataset" and len(set_calls) >= self.guard.max_set_dataset_calls:
             return {
                 "type": "final",
                 "answer": "已多次切换数据集。请对当前数据集调用 make_thematic_map 生成专题图，不要再继续切换。",

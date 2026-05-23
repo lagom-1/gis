@@ -491,8 +491,12 @@ class ConversationalAgent:
             return "警告：同一轮对话中 set_map_style 已调用多次。你必须立即返回 final。"
 
         map_calls = [h for h in history if h["tool"] == "make_thematic_map"]
-        if len(map_calls) >= 2:
-            return "警告：同一轮对话中 make_thematic_map 已调用多次。你必须立即返回 final。"
+        if len(map_calls) >= 15:
+            return "警告：同一轮对话中 make_thematic_map 已调用超过 15 次。你必须立即返回 final。"
+
+        set_calls = [h for h in history if h.get("tool") == "set_current_dataset"]
+        if len(set_calls) >= 15:
+            return "警告：同一轮对话中 set_current_dataset 已调用超过 15 次。请对当前数据集制图后 final。"
 
         _download_tools = {
             "gee_download_landsat_sca", "gee_download_monthly_lst",
