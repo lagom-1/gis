@@ -8,28 +8,50 @@ from typing import Any, Dict, List, Optional
 
 def _infer_stage(runtime: Dict[str, Any], history: List[Dict[str, Any]]) -> str:
     """推断当前执行阶段，帮助 LLM 正确决策下一步"""
-    has_data = bool(runtime.get("current_dataset") or runtime.get("last_output"))
+    has_data = bool(runtime.get("current_dataset") or runtime.get("last_tif_output"))
     has_region = bool(runtime.get("last_region_name") and runtime.get("has_last_region_geojson"))
 
-    # 检查是否已有输出文件
-    has_output = any(
-        h.get("tool") in ("make_thematic_map", "classify_map", "generate_web_map",
-                          "gee_lst_timelapse", "gee_lst_timelapse_local")
+    # 数据生产工具集合
+    _DATA_PRODUCERS = {"gee_compute_lst", "gee_download_monthly_lst",
+                       "gee_download_yearly_lst", "gee_download_multi_year_lst",
+                       "gee_download_landsat_sca", "run_lst"}
+
+    # 制图/输出工具集合
+    _OUTPUT_TOOLS = {"make_thematic_map", "classify_map", "generate_web_map",
+                     "gee_lst_timelapse", "gee_lst_timelapse_local"}
+
+    # 统计数据生产工具输出的总文件数（检查 output_files 字段）
+    total_data_files = 0
+    for h in history:
+        if (h.get("tool") in _DATA_PRODUCERS
+                and h.get("result", {}).get("success")):
+            output_files = h["result"].get("output_files", [])
+            if output_files:
+                # 有 output_files 字段，统计文件数量
+                total_data_files += len(output_files)
+            else:
+                # 没有 output_files 字段，可能是单文件下载，算作1个
+                total_data_files += 1
+
+    # 统计制图工具成功调用次数（不去重，每个文件都算）
+    output_count = sum(
+        1 for h in history
+        if h.get("tool") in _OUTPUT_TOOLS
         and h.get("result", {}).get("success")
-        for h in history
     )
 
     # 检查是否刚完成数据下载/生产
-    data_produced = any(
-        h.get("tool") in ("gee_compute_lst", "gee_download_monthly_lst",
-                          "gee_download_yearly_lst", "gee_download_multi_year_lst",
-                          "gee_download_landsat_sca", "run_lst")
-        and h.get("result", {}).get("success")
-        for h in history
-    )
+    data_produced = total_data_files > 0
+
+    # 检查是否已有输出文件（且所有数据都已制图）
+    has_output = output_count > 0
+
+    # 批量制图场景：数据已下载但还有文件未制图，应继续制图
+    if data_produced and output_count < total_data_files:
+        return "ready_to_map"     # 还有文件需要制图
 
     if has_output:
-        return "has_output"       # 已有专题图，用户可能是要修改/追加
+        return "has_output"       # 所有数据都已制图，用户可能是要修改/追加
     elif data_produced:
         return "ready_to_map"     # 数据已就绪，应制图或分析
     elif has_data:
@@ -73,6 +95,21 @@ def build_context(
         )
     ]
 
+    # 提取已成功执行的工具摘要（跳过 __system_hint__）
+    success_tools = []
+    for h in history:
+        t = h.get("tool", "")
+        if t and t != "__system_hint__" and h.get("result", {}).get("success"):
+            if t not in success_tools:
+                success_tools.append(t)
+
+    # 找到最近的真实工具结果（跳过 __system_hint__）
+    last_real_result = None
+    for h in reversed(history):
+        if h.get("tool") != "__system_hint__":
+            last_real_result = h.get("result")
+            break
+
     return {
         "user_input": user_input,
         "conversation_history": context_text,
@@ -82,7 +119,8 @@ def build_context(
         "stage": stage,
         "stage_hint": _stage_hint(stage),
         "output_count": len(output_files),
-        "last_result": history[-1].get("result") if history else None,
+        "last_result": last_real_result,
+        "success_tools": success_tools,
         "loop_warning": loop_warning,
         "dag_directive": dag_directive,
     }
