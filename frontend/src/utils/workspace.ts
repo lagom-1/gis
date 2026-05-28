@@ -24,6 +24,12 @@ export function extractFilesFromResult(result: Record<string, unknown> | undefin
       if (name) files.push({ name, path, size: 0, modified: new Date().toISOString() })
     }
   }
+  // 兼容旧格式：output_path + format=html
+  if (!result.output_html && typeof result.output_path === 'string' && result.format === 'html') {
+    const path = result.output_path
+    const name = path.replace(/\\/g, '/').split('/').pop() || path
+    if (name) files.push({ name, path, size: 0, modified: new Date().toISOString() })
+  }
   const of = result.output_files
   if (Array.isArray(of)) {
     for (const f of of) {
