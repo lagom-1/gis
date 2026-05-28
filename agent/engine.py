@@ -240,6 +240,9 @@ class AgentLoop:
                 "classify_map": "分类完成。可选后续：enhance_raster（增强）、statistics（统计）、view_3d（3D视图）",
                 "profile_analysis": "剖面分析完成。可选后续：statistics（统计）、view_3d（3D视图）",
                 "enhance_raster": "增强完成。可选后续：statistics（统计）、view_3d（3D视图）",
+                "make_thematic_map": "专题图已生成。如果用户没有其他要求，请返回 final。",
+                "generate_web_map": "Web 地图已生成。如果用户没有其他要求，请返回 final。",
+                "set_map_style": "样式已更新。请调用 make_thematic_map 出图，然后返回 final。",
             }
             if tool in chain_hints:
                 history.append({

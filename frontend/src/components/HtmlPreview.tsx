@@ -7,31 +7,10 @@ interface HtmlPreviewProps {
 }
 
 export default function HtmlPreview({ src, filename }: HtmlPreviewProps) {
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState(false)
-  const [blobUrl, setBlobUrl] = useState<string | null>(null)
   const [iframeKey, setIframeKey] = useState(0)
 
-  // 加载 HTML 为 blob URL 以便 iframe 使用
-  useState(() => {
-    fetch(src)
-      .then(r => r.text())
-      .then(html => {
-        const blob = new Blob([html], { type: 'text/html' })
-        const url = URL.createObjectURL(blob)
-        setBlobUrl(url)
-        setLoading(false)
-      })
-      .catch(() => {
-        setError(true)
-        setLoading(false)
-      })
-  })
-
   const handleRefresh = () => {
-    setLoading(true)
     setIframeKey(k => k + 1)
-    setLoading(false)
   }
 
   return (
@@ -62,29 +41,15 @@ export default function HtmlPreview({ src, filename }: HtmlPreviewProps) {
         </div>
       </div>
 
-      {/* iframe 内容 */}
+      {/* iframe 内容 - 直接使用 src，避免 blob URL 的 opaque origin 问题 */}
       <div className="flex-1 bg-white min-h-0">
-        {loading && !error && (
-          <div className="h-full flex items-center justify-center text-gray-400 text-sm">
-            加载中...
-          </div>
-        )}
-        {error && (
-          <div className="h-full flex items-center justify-center text-gray-400 text-sm">
-            无法加载 HTML，请
-            <a href={src} target="_blank" rel="noopener noreferrer" className="text-primary-600 ml-1">在新窗口打开</a>
-          </div>
-        )}
-        {blobUrl && (
-          <iframe
-            key={iframeKey}
-            src={blobUrl}
-            title={filename}
-            className="w-full h-full border-0"
-            sandbox="allow-scripts allow-same-origin"
-            onLoad={() => setLoading(false)}
-          />
-        )}
+        <iframe
+          key={iframeKey}
+          src={src}
+          title={filename}
+          className="w-full h-full border-0"
+          sandbox="allow-scripts allow-same-origin allow-popups"
+        />
       </div>
     </div>
   )

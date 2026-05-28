@@ -7,14 +7,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict
 
-import config as app_config
 from tools.base import BaseTool, tool
-
-
-def _out_dir() -> Path:
-    d = Path(app_config.OUTPUTS_DIR)
-    d.mkdir(parents=True, exist_ok=True)
-    return d
 
 
 def _stem(path: str | None) -> str:
@@ -98,7 +91,7 @@ class View3DTool(_VisBase):
         from gis.view3d import render_3d
         result = render_3d(
             tif_path=tif,
-            output_png=str(_out_dir() / f"{_stem(tif)}_3d.png"),
+            output_png=str(self._out_dir() / f"{_stem(tif)}_3d.png"),
             elevation=float(elevation), azimuth=float(azimuth),
             vertical_exaggeration=float(vertical_exaggeration),
             colormap=colormap, render_mode=render_mode,
@@ -111,7 +104,11 @@ class View3DTool(_VisBase):
 @tool(
     name="compare_views",
     description="对比原始图和当前结果图。",
-    parameters={"mode": "side_by_side 或 difference"},
+    parameters={
+        "mode": "side_by_side 或 difference",
+        "tif_original": "可选，原始数据路径，缺省使用 source_dataset",
+        "tif_result": "可选，结果数据路径，缺省使用 current_dataset",
+    },
     category="visualization",
 )
 class CompareViewsTool(_VisBase):
@@ -123,7 +120,7 @@ class CompareViewsTool(_VisBase):
         from gis.compare import compare_views
         result = compare_views(
             tif_original=tif_orig, tif_result=tif_res,
-            output_png=str(_out_dir() / f"{_stem(tif_res)}_compare.png"),
+            output_png=str(self._out_dir() / f"{_stem(tif_res)}_compare.png"),
             mode=mode,
         )
         if result.get("success"):
@@ -145,8 +142,8 @@ class TransformRasterTool(_VisBase):
         from gis.transform import transform_raster
         result = transform_raster(
             tif_path=tif,
-            output_tif=str(_out_dir() / f"{_stem(tif)}_{operation}.tif"),
-            output_png=str(_out_dir() / f"{_stem(tif)}_{operation}.png"),
+            output_tif=str(self._out_dir() / f"{_stem(tif)}_{operation}.tif"),
+            output_png=str(self._out_dir() / f"{_stem(tif)}_{operation}.png"),
             operation=operation,
         )
         if result.get("success"):
@@ -190,7 +187,9 @@ class MakeThematicMapTool(_VisBase):
         if dpi:
             style["dpi"] = int(dpi)
 
-        output_path = kwargs.get("output_path") or str(self._out_dir() / f"{_stem(tif)}_LST专题图.png")
+        # 文件名包含配色方案，不同配色生成不同文件，方便用户比较
+        colormap_name = style.get("colormap", "coolwarm")
+        output_path = kwargs.get("output_path") or str(self._out_dir() / f"{_stem(tif)}_{colormap_name}_专题图.png")
         result = generate_cartographic_map(
             tif_path=tif, output_path=output_path,
             title=style["title"],
@@ -240,6 +239,8 @@ class MakeThematicMapTool(_VisBase):
         "show_heatmap": "是否显示热力图(true/false)",
         "overlay_opacity": "透明度(0~1)",
         "tif_path": "可选，栅格路径",
+        "center_lat": "地图中心纬度", "center_lon": "地图中心经度",
+        "zoom_start": "初始缩放级别，默认 12",
     },
     category="visualization",
 )
@@ -250,7 +251,7 @@ class GenerateWebMapTool(_VisBase):
         if not tif:
             return {"success": False, "message": "没有可用栅格"}
         from gis.web_map import generate_web_map
-        output_path = str(_out_dir() / f"{_stem(tif)}_interactive_map.html")
+        output_path = str(self._out_dir() / f"{_stem(tif)}_interactive_map.html")
         result = generate_web_map(
             tif_path=tif, output_path=output_path,
             title=title or f"交互式地图 - {_stem(tif)}",
@@ -265,4 +266,5 @@ class GenerateWebMapTool(_VisBase):
         )
         if result.get("success"):
             self.runtime.last_output = output_path
+            self.runtime.register_output(output_path, "html")
         return result
