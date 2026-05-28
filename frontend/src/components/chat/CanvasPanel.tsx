@@ -35,18 +35,6 @@ function TabIcon({ cat }: { cat: string }) {
   }
 }
 
-// ── 友好文件名解析 ──
-function friendlyName(f: OutputFile): string {
-  const name = f.name.replace(/\.(png|jpg|jpeg|tif|tiff)$/i, '')
-  // 尝试提取 _YYYY_MM_ 模式
-  const m = name.match(/_(\d{4})_(\d{2})_/)
-  if (m) return `${m[1]}年${m[2]}月 专题图`
-  // 尝试提取 _YYYY年M月_ 模式
-  const m2 = name.match(/_(\d{4})年(\d{1,2})月/)
-  if (m2) return `${m2[1]}年${m2[2]}月 专题图`
-  return name.length > 20 ? name.slice(0, 18) + '...' : name
-}
-
 // ── 文件路径 → URL ──
 function buildFileUrl(f: OutputFile): string {
   const raw = (f as any).relative_path || f.path || f.name
@@ -145,8 +133,8 @@ export function CanvasPanel({ files, onFileClick }: Props) {
     const right = rightFile || comparableImages[comparableImages.length - 1]
     const leftUrl = getUrl(left)
     const rightUrl = getUrl(right)
-    const leftName = friendlyName(left)
-    const rightName = friendlyName(right)
+    const leftName = left.name
+    const rightName = right.name
 
     return (
       <div className="flex flex-col flex-1 min-h-0 bg-white">
@@ -168,7 +156,7 @@ export function CanvasPanel({ files, onFileClick }: Props) {
                 className="text-[11px] border border-gray-200 rounded px-1.5 py-0.5 bg-white text-gray-700 max-w-[130px] truncate focus:outline-none focus:border-blue-300"
               >
                 {comparableImages.map(f => (
-                  <option key={f.name} value={f.name}>{friendlyName(f)}</option>
+                  <option key={f.name} value={f.name}>{f.name}</option>
                 ))}
               </select>
             </div>
@@ -187,7 +175,7 @@ export function CanvasPanel({ files, onFileClick }: Props) {
                 className="text-[11px] border border-gray-200 rounded px-1.5 py-0.5 bg-white text-gray-700 max-w-[130px] truncate focus:outline-none focus:border-blue-300"
               >
                 {comparableImages.map(f => (
-                  <option key={f.name} value={f.name}>{friendlyName(f)}</option>
+                  <option key={f.name} value={f.name}>{f.name}</option>
                 ))}
               </select>
             </div>
@@ -284,7 +272,7 @@ export function CanvasPanel({ files, onFileClick }: Props) {
               }`}
             >
               <TabIcon cat={c} />
-              <span className="max-w-[100px] truncate">{f.name}</span>
+              <span className="max-w-[200px] truncate">{f.name}</span>
             </button>
           )
         })}

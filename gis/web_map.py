@@ -244,11 +244,15 @@ def generate_web_map(
     except ImportError:
         return {"success": False, "message": "folium 未安装，请执行: pip install folium"}
 
+    _temp_files: list[str] = []
     try:
         # 主图层 → PNG overlay
         overlay_path, bounds = _raster_to_png_overlay(tif_path, colormap=colormap)
         if not overlay_path:
             return {"success": False, "message": "栅格数据为空或无法读取"}
+
+        # 跟踪所有临时文件，确保 finally 清理
+        _temp_files = [overlay_path]
 
         # 计算中心
         if center_lat is None:
@@ -343,6 +347,7 @@ def generate_web_map(
             if os.path.exists(layer_path):
                 lp, lb = _raster_to_png_overlay(layer_path, colormap=layer_cmap)
                 if lp:
+                    _temp_files.append(lp)
                     ImageOverlay(
                         image=lp,
                         bounds=[[lb["south"], lb["west"]], [lb["north"], lb["east"]]],
@@ -448,16 +453,10 @@ def generate_web_map(
             os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
             m.save(output_path)
 
-        # 清理临时文件
-        try:
-            os.unlink(overlay_path)
-        except Exception:
-            pass
-
         return {
             "success": True,
             "message": f"交互式地图已生成: {output_path}",
-            "output_path": output_path,
+            "output_html": output_path,
             "format": "html",
             "center": [center_lat, center_lon],
             "bounds": bounds,
@@ -467,6 +466,12 @@ def generate_web_map(
     except Exception as e:
         import traceback
         return {"success": False, "message": f"Web 地图生成失败: {e}", "traceback": traceback.format_exc(limit=3)}
+    finally:
+        for tmp in _temp_files:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
 
 
 def _colormap_css_gradient(colormap: str) -> str:
@@ -590,7 +595,7 @@ def generate_timelapse_web_map(
         return {"success": False, "message": "无有效数据"}
 
     # ── 生成 PNG overlay ──
-    overlays = {}
+    overlays: dict[int, str] = {}
     for tif_path, year in zip(lst_tif_paths, years):
         if year not in all_grids:
             continue
@@ -747,17 +752,17 @@ def generate_timelapse_web_map(
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(full_html)
 
-    # 清理临时 PNG
+    # 清理临时 PNG（Folium 已将图片内嵌为 base64）
     for png in overlays.values():
         try:
             os.unlink(png)
-        except Exception:
+        except OSError:
             pass
 
     return {
         "success": True,
         "message": f"交互式时间序列地图已生成: {output_path}",
-        "output_path": output_path,
+        "output_html": output_path,
         "years": sorted_years,
         "vmin": global_vmin,
         "vmax": global_vmax,

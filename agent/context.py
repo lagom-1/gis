@@ -110,6 +110,12 @@ def build_context(
             last_real_result = h.get("result")
             break
 
+    # 提取最近的系统提示（__system_hint__），让 LLM 能看到强制约束
+    recent_hints = [
+        h.get("reason", "") for h in history[-10:]
+        if h.get("tool") == "__system_hint__" and h.get("reason")
+    ]
+
     return {
         "user_input": user_input,
         "conversation_history": context_text,
@@ -121,6 +127,7 @@ def build_context(
         "output_count": len(output_files),
         "last_result": last_real_result,
         "success_tools": success_tools,
+        "system_hints": recent_hints,  # 最近的系统提示，包含强制约束
         "loop_warning": loop_warning,
         "dag_directive": dag_directive,
     }

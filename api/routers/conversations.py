@@ -376,6 +376,9 @@ async def send_message_stream(
     runtime = GISRuntime(conversation_id=conv_id)
     if saved_state:
         runtime.from_dict(saved_state)
+        logger.info(f"[SSE] 恢复会话状态: current_dataset={runtime.current_dataset}, last_region_name={runtime.last_region_name}")
+    else:
+        logger.info(f"[SSE] 无历史状态，全新运行时")
     registry = ToolRegistry(runtime)
     llm = LLMClient()
     agent = AgentLoop(llm, registry, runtime)
@@ -437,10 +440,53 @@ async def send_message_stream(
         # 轮询事件直到完成，同时增量保存工具结果到 DB
         # 不设硬性超时——Agent 自身有 max_steps 和循环检测保护
         should_break = False
+        state_saved = False
         import time
         last_heartbeat = time.time()
 
-        while not future.done() or events:
+        def _save_state_and_messages():
+            """保存状态和消息（在 done 事件发送前调用）"""
+            nonlocal state_saved
+            if state_saved:
+                return
+            state_saved = True
+
+            # 保存尚未保存的工具调用
+            for i, h in enumerate(tool_history):
+                tool = h.get("tool", "")
+                h_step = h.get("step", 0)
+                step_key = f"{tool}-{h_step}"
+                if step_key in saved_steps:
+                    continue
+                saved_steps.add(step_key)
+                args = h.get("args", {})
+                tool_result = h.get("result", {})
+                add_message(db, conv_id, role="tool_call", content=f"调用工具: {tool}",
+                           tool_name=tool, tool_args=args, step_number=h_step)
+                add_message(db, conv_id, role="tool_result", content=tool_result.get("message", ""),
+                           tool_name=tool, tool_result=tool_result, step_number=h_step)
+
+            # 保存最终回复
+            if error_occurred:
+                assistant_content = error_message or "执行失败"
+            else:
+                result_type = final_result.get("type", "final")
+                assistant_content = final_result.get("question" if result_type == "ask_user" else "answer", "任务完成。")
+            add_message(db, conv_id, role="assistant", content=assistant_content, output_files=None)
+
+            # 保存运行时状态到 DB
+            try:
+                state_dict = runtime.to_dict()
+                logger.info(f"[SSE] 保存状态: current_dataset={state_dict.get('current_dataset')}, last_region_name={state_dict.get('last_region_name')}")
+                save_conversation_state(db, conv_id, state_dict)
+                conv.status = ConversationStatus.ACTIVE
+                db.commit()
+                logger.info(f"[SSE] 状态保存成功 (conv={conv_id})")
+            except Exception as save_exc:
+                logger.error(f"[SSE] 状态保存失败: {save_exc}", exc_info=True)
+
+        try:
+          while not future.done() or events:
             # 每 15 秒发送心跳，防止代理/网关因长时间无数据断开连接
             now = time.time()
             if now - last_heartbeat > 15:
@@ -490,9 +536,15 @@ async def send_message_stream(
                 elif event_type == "error":
                     error_occurred = True
                     error_message = str(data.get("message", ""))
+                    _save_state_and_messages()
                     should_break = True
                     break
-                elif event_type in ("final_answer", "ask_user", "done"):
+                elif event_type in ("final_answer", "done"):
+                    _save_state_and_messages()
+                    should_break = True
+                    break
+                elif event_type == "ask_user":
+                    _save_state_and_messages()
                     should_break = True
                     break
 
@@ -501,93 +553,13 @@ async def send_message_stream(
             if batch:
                 continue
             await asyncio.sleep(0.2)
-
-        executor.shutdown(wait=False)
-
-        # ── 智能补齐：如果 TIF 已下载但未生成专题图，自动生成 ──
-        tif_path = runtime.current_tif()
-        has_map = any(h.get("tool") == "make_thematic_map" for h in tool_history)
-        if tif_path and not has_map:
-            try:
-                logger.info(f"自动生成专题图: {tif_path}")
-                from gis.cartographic_map import generate_cartographic_map
-                from pathlib import Path
-                region_name = runtime.last_region_name or "研究区"
-                stem = Path(tif_path).stem
-                map_path = str(Path(tif_path).parent / f"{stem}_map.png")
-                map_result = generate_cartographic_map(
-                    tif_path=tif_path,
-                    output_path=map_path,
-                    title=f"地表温度 - {region_name}",
-                    colormap="coolwarm",
-                )
-                if map_result.get("success"):
-                    runtime.last_output = map_result.get("output_png")
-                    # 追加到 tool_history 供后续保存
-                    tool_history.append({
-                        "step": len(tool_history) + 1,
-                        "tool": "make_thematic_map",
-                        "args": {},
-                        "reason": "超时/出错后自动生成专题图",
-                        "result": map_result,
-                    })
-                    logger.info(f"专题图已自动生成: {map_result.get('output_png')}")
-            except Exception as e:
-                logger.error(f"自动生成专题图失败: {e}")
-
-        # 保存尚未保存的工具调用（兜底），使用与增量保存一致的 step_key
-        for i, h in enumerate(tool_history):
-            tool = h.get("tool", "")
-            h_step = h.get("step", 0)
-            step_key = f"{tool}-{h_step}"
-            if step_key in saved_steps:
-                continue
-            saved_steps.add(step_key)
-            args = h.get("args", {})
-            tool_result = h.get("result", {})
-            reason = h.get("reason", "")
-
-            add_message(
-                db, conv_id,
-                role="tool_call",
-                content=f"调用工具: {tool}",
-                tool_name=tool,
-                tool_args=args,
-                step_number=step,
-            )
-            add_message(
-                db, conv_id,
-                role="tool_result",
-                content=tool_result.get("message", ""),
-                tool_name=tool,
-                tool_result=tool_result,
-                step_number=step,
-            )
-
-        # 保存最终回复
-        if error_occurred:
-            assistant_content = error_message or "执行失败"
-        else:
-            result_type = final_result.get("type", "final")
-            if result_type == "ask_user":
-                assistant_content = final_result.get("question", "")
-            else:
-                assistant_content = final_result.get("answer", "任务完成。")
-
-        add_message(
-            db, conv_id,
-            role="assistant",
-            content=assistant_content,
-            output_files=None,
-        )
-
-        # 保存状态并恢复会话状态
-        save_conversation_state(db, conv_id, runtime.to_dict())
-        conv.status = ConversationStatus.ACTIVE
-        db.commit()
-
-        # 发送完成信号
-        yield f"event: done\ndata: {{}}\n\n"
+        finally:
+            executor.shutdown(wait=False)
+            # 最终兜底：如果前面没有保存成功，再试一次
+            if not state_saved:
+                logger.warning("[SSE] finally 兜底保存状态")
+                _save_state_and_messages()
+            # done 事件已在主循环中发送，这里不再重复
 
     return StreamingResponse(
         event_generator(),

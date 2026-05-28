@@ -8,13 +8,16 @@ Agent 引擎 - 纯 LLM 决策 → 工具执行循环
 """
 from __future__ import annotations
 
+import logging
 import os
-import re
 import traceback
 from typing import Any, Callable, Dict, List, Optional
 
 from agent.context import build_context
-from agent.guard import SafetyGuard
+from agent.guard import SafetyGuard, has_web_map_intent
+from agent.prompts.system import CONVERSATIONAL_SYSTEM_PROMPT
+
+logger = logging.getLogger(__name__)
 
 # ── 错误分类 ──────────────────────────────────────────
 
@@ -104,7 +107,7 @@ class AgentLoop:
         registry,
         runtime,
         guard: Optional[SafetyGuard] = None,
-        max_steps: int = 25,
+        max_steps: int = 100,
     ):
         self.llm = llm
         self.registry = registry
@@ -130,14 +133,15 @@ class AgentLoop:
                                      "gee_lst_trend_chart"}
 
     def _correct_decision(self, decision: dict, history: list, user_input: str = "") -> dict:
-        """决策校正：GEE 工作流顺序 + 去重 + 循环防护"""
+        """决策校正：仅保留必要的安全检查，不干预 LLM 正常决策"""
         if decision.get("type") != "tool_call":
             return decision
 
         tool = decision.get("tool")
         args = decision.get("args") or {}
 
-        # ── 0. GEE 工具链强制顺序：resolve_admin_region 必须先行 ──
+        # ── GEE 工具链强制顺序：resolve_admin_region 必须先行 ──
+        # 这是必要的安全检查，因为 GEE 操作需要行政区边界
         if tool in self._GEE_TOOLS:
             admin_resolved = any(
                 h.get("tool") == "resolve_admin_region"
@@ -145,7 +149,6 @@ class AgentLoop:
                 for h in history
             )
             if not admin_resolved:
-                # 尝试从用户输入中提取行政区名称
                 from gis.admin_region import extract_admin_region_name
                 region_name = extract_admin_region_name(user_input)
                 if region_name:
@@ -153,55 +156,10 @@ class AgentLoop:
                         "type": "tool_call",
                         "tool": "resolve_admin_region",
                         "args": {"region_name": region_name},
-                        "reason": f"[强制校正] GEE 操作前必须先解析行政区: {region_name}",
+                        "reason": f"[安全校正] GEE 操作前必须先解析行政区: {region_name}",
                     }
 
-        # ── 1. resolve_admin_region 已调用过 → 禁止再次调用 ──
-        if tool == "resolve_admin_region":
-            for h in history:
-                if h.get("tool") == "resolve_admin_region":
-                    if h.get("result", {}).get("success"):
-                        region = self.runtime.last_region_name or "未知区域"
-                        # 如果有 GEE 工具失败过，不要强制 final——允许 Agent 重试其他工具
-                        last_gee_failed = any(
-                            h2.get("tool") in self._GEE_TOOLS and not h2.get("result", {}).get("success")
-                            for h2 in history
-                        )
-                        if not last_gee_failed:
-                            return {
-                                "type": "final",
-                                "answer": f"行政区边界已解析完成（{region}），请使用已解析的研究区继续执行 GEE 数据下载或分析。",
-                            }
-                    else:
-                        return {
-                            "type": "final",
-                            "answer": "行政区边界解析失败，请检查区域名称是否正确，或手动提供 GeoJSON 边界文件。",
-                        }
-
-        # ── 2. gee_init 成功后禁止重复调用 ──
-        if tool == "gee_init":
-            for h in history:
-                if h.get("tool") == "gee_init" and h.get("result", {}).get("success"):
-                    return {
-                        "type": "final",
-                        "answer": "GEE 已成功初始化，请直接进行数据下载或分析。",
-                    }
-
-        # ── 3. set_current_dataset 同路径 → 自动转制图（不拦截，不跳转）──
-        if tool == "set_current_dataset" and self.runtime.current_dataset:
-            target = args.get("path", "")
-            if target and target == self.runtime.current_dataset:
-                pass  # 允许重复设置，不拦截
-
-        # ── 4. 参数级去重：仅下载工具的相同参数拦截 ──
-        if tool in self._DATA_PRODUCERS:
-            for h in history:
-                if h.get("tool") == tool and h.get("args") == args and h.get("result", {}).get("success"):
-                    return {
-                        "type": "final",
-                        "answer": f"{tool} 已用相同参数 {args} 成功执行过。请继续下一步，使用已有数据生成专题图或处理其他月份/年份。",
-                    }
-
+        # 其他决策交给 LLM 自行判断，不强制校正
         return decision
 
     # ── 复合指令动词→工具映射 ──
@@ -214,6 +172,8 @@ class AgentLoop:
         "对比": "compare_views",
         "报告": "generate_report", "导出": "export_result",
         "制图": "make_thematic_map", "出图": "make_thematic_map",
+        "web地图": "generate_web_map", "交互地图": "generate_web_map",
+        "在线地图": "generate_web_map", "可缩放地图": "generate_web_map",
         "动画": "gee_lst_timelapse_local", "gif": "gee_lst_timelapse_local",
         "趋势": "gee_lst_trend_chart",
         "卷帘": "compare_views",
@@ -245,46 +205,71 @@ class AgentLoop:
         }
         return [t for t in all_needed if t not in executed_ok]
 
-    def _get_next_unmapped_file(self, history: list) -> str | None:
-        """找到批量下载产生但尚未制图的文件列表中的下一个待处理 TIF"""
-        # 1. 找到最近的数据生产工具调用，提取其 output_files
-        all_output_tifs = []
-        for h in history:
-            if h.get("tool") in self._DATA_PRODUCERS and h.get("result", {}).get("success"):
-                of = h["result"].get("output_files", [])
-                for f in of:
-                    tif_path = f.get("path", "")
-                    if tif_path and tif_path.endswith(".tif"):
-                        if tif_path not in all_output_tifs:
-                            all_output_tifs.append(tif_path)
+    def _execute_tool_call(self, step: int, decision: dict, history: list,
+                           user_input: str, emit: Callable,
+                           progress_callback: Optional[Callable] = None) -> Optional[str]:
+        """执行工具调用，返回 final_answer（若应终止）或 None（继续循环）"""
+        tool = str(decision.get("tool", "")).strip()
+        args = decision.get("args") or {}
+        reason = str(decision.get("reason", "")).strip()
 
-        if len(all_output_tifs) <= 1:
-            return None  # 只有 0 或 1 个文件，无需批量处理
+        emit("tool_start", {"tool": tool, "args": args, "reason": reason})
+        if progress_callback:
+            try:
+                progress_callback(step, tool, reason or f"执行 {tool}")
+            except Exception as e:
+                logger.debug("progress_callback 异常: %s", e)
 
-        # 2. 找到已被 make_thematic_map 处理过的 TIF
-        mapped_tifs = set()
-        for h in history:
-            if h.get("tool") == "set_current_dataset":
-                tif_path = h.get("args", {}).get("path", "")
-                if tif_path:
-                    # 检查这个 set_current_dataset 之后是否有 make_thematic_map
-                    step_idx = history.index(h)
-                    for later_h in history[step_idx:]:
-                        if later_h.get("tool") == "make_thematic_map" and later_h.get("result", {}).get("success"):
-                            mapped_tifs.add(tif_path)
-                            break
+        try:
+            result = self.registry.call(tool, args)
+            if "success" not in result:
+                result["success"] = False
+        except Exception as exc:
+            result = {
+                "success": False, "message": str(exc),
+                "traceback": traceback.format_exc(limit=4),
+                "error_info": classify_error(exc, tool),
+            }
 
-        # 也检查直接传 tif_path 给 make_thematic_map 的情况
-        for h in history:
-            if h.get("tool") == "make_thematic_map" and h.get("result", {}).get("success"):
-                tif_path = h.get("args", {}).get("tif_path", "")
-                if tif_path:
-                    mapped_tifs.add(tif_path)
+        emit("tool_result", {"tool": tool, "result": result, "ui_action": get_ui_action(tool, result)})
+        history.append({"step": step, "tool": tool, "args": args, "reason": reason, "result": result})
 
-        # 3. 返回第一个未制图的 TIF
-        for tif_path in all_output_tifs:
-            if tif_path not in mapped_tifs:
-                return tif_path
+        # 工具链提示：只提供信息，不强制要求
+        if result.get("success"):
+            chain_hints = {
+                "classify_map": "分类完成。可选后续：enhance_raster（增强）、statistics（统计）、view_3d（3D视图）",
+                "profile_analysis": "剖面分析完成。可选后续：statistics（统计）、view_3d（3D视图）",
+                "enhance_raster": "增强完成。可选后续：statistics（统计）、view_3d（3D视图）",
+            }
+            if tool in chain_hints:
+                history.append({
+                    "step": step, "tool": "__system_hint__", "args": {},
+                    "reason": chain_hints[tool],
+                    "result": {"success": True, "message": chain_hints[tool]},
+                })
+
+        # GEE 未认证时自动重试
+        if not result.get("success") and result.get("requires") == "gee_init":
+            try:
+                gee_result = self.registry.call("gee_init", {})
+                if gee_result.get("success"):
+                    result = self.registry.call(tool, args)
+                    if "success" not in result:
+                        result["success"] = False
+                    emit("tool_result", {"tool": tool, "result": result, "ui_action": get_ui_action(tool, result)})
+                    history[-1]["result"] = result
+            except Exception as e:
+                logger.debug("GEE 自动重试异常: %s", e)
+
+        # set_map_style 后提示 LLM 可以出图
+        if tool == "set_map_style" and result.get("success", False):
+            history.append({
+                "step": step, "tool": "__system_hint__", "args": {},
+                "reason": "样式已更新。可调用 make_thematic_map 生成新配色的专题图，或返回 final 结束任务。",
+                "result": {"success": True, "message": "样式已更新，可选择出图或结束。"},
+            })
+
+        # 连续失败不终止，让 LLM 自行判断
 
         return None
 
@@ -316,30 +301,20 @@ class AgentLoop:
             if on_event:
                 try:
                     on_event(event_type, data)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("on_event 回调异常 (%s): %s", event_type, e)
 
         for step in range(1, self.max_steps + 1):
             # ── 1. 安全检查 ──
             loop_warning = self.guard.check(history)
             if loop_warning:
-                forced_stop = True
-                if self.guard.should_auto_map(history):
-                    try:
-                        map_result = self.registry.call("make_thematic_map", {})
-                        if "success" not in map_result:
-                            map_result["success"] = True
-                    except Exception as exc:
-                        map_result = {"success": False, "message": str(exc)}
-                    history.append({
-                        "step": step, "tool": "make_thematic_map", "args": {},
-                        "reason": "循环检测触发前自动生成专题图", "result": map_result,
-                    })
-                    last_result = map_result
-                    emit("tool_result", {"tool": "make_thematic_map", "result": map_result, "ui_action": "RENDER_IMAGE"})
-                final_answer = f"{loop_warning}\n\n{last_result.get('message', '任务已完成。')}"
-                emit("final_answer", {"content": final_answer})
-                break
+                logger.warning(f"[Guard] {loop_warning}")
+                # 注入系统警告到历史，让LLM看到并停止循环
+                history.append({
+                    "step": step, "tool": "__system_hint__", "args": {},
+                    "reason": loop_warning,
+                    "result": {"success": True, "message": loop_warning},
+                })
 
             emit("step_start", {"step": step, "max": self.max_steps})
 
@@ -352,6 +327,7 @@ class AgentLoop:
                     "last_region_name": self.runtime.last_region_name,
                     "has_last_region_geojson": self.runtime.last_region_geojson is not None,
                     "map_style": self.runtime.map_style,
+                    "output_files": self.runtime.output_files,
                 }
                 pending = self._get_pending_subtasks(history, user_input)
                 payload = build_context(
@@ -366,7 +342,6 @@ class AgentLoop:
                 )
                 from agent.prompts.system import CONVERSATIONAL_SYSTEM_PROMPT
                 decision = self.llm.invoke_json(CONVERSATIONAL_SYSTEM_PROMPT, payload)
-                # ── 2.5 决策校正 ──
                 decision = self._correct_decision(decision, history, user_input)
             except Exception as exc:
                 final_answer = f"决策失败: {exc}"
@@ -375,63 +350,9 @@ class AgentLoop:
 
             # ── 3. final ──
             if decision.get("type") == "final":
-                # 自动出图检查
-                if self.guard.should_auto_map(history):
-                    try:
-                        map_result = self.registry.call("make_thematic_map", {})
-                        if "success" not in map_result:
-                            map_result["success"] = True
-                    except Exception as exc:
-                        map_result = {"success": False, "message": str(exc)}
-                    history.append({
-                        "step": step, "tool": "make_thematic_map", "args": {},
-                        "reason": "自动出图", "result": map_result,
-                    })
-                    last_result = map_result
-                    emit("tool_result", {"tool": "make_thematic_map", "result": map_result, "ui_action": "RENDER_IMAGE"})
-
-                # 批量制图检查
-                next_unmapped = self._get_next_unmapped_file(history)
-                if next_unmapped and step < self.max_steps - 3:
-                        fname = os.path.basename(next_unmapped)
-                        set_result = self.registry.call("set_current_dataset", {"path": next_unmapped})
-                        if "success" not in set_result:
-                            set_result["success"] = False
-                        history.append({
-                            "step": step, "tool": "set_current_dataset",
-                            "args": {"path": next_unmapped},
-                            "reason": f"[强制批量] {fname}", "result": set_result,
-                        })
-                        emit("tool_start", {"tool": "set_current_dataset", "args": {"path": next_unmapped}})
-                        emit("tool_result", {"tool": "set_current_dataset", "result": set_result, "ui_action": "NONE"})
-                        map_result = self.registry.call("make_thematic_map", {"tif_path": next_unmapped})
-                        if "success" not in map_result:
-                            map_result["success"] = True
-                        history.append({
-                            "step": step + 1, "tool": "make_thematic_map",
-                            "args": {"tif_path": next_unmapped},
-                            "reason": f"[强制批量] {fname}", "result": map_result,
-                        })
-                        last_result = map_result
-                        emit("tool_result", {"tool": "make_thematic_map", "result": map_result, "ui_action": "RENDER_IMAGE"})
-                        continue
-                else:
-                    if self.guard.should_auto_map(history):
-                        try:
-                            map_result = self.registry.call("make_thematic_map", {})
-                            if "success" not in map_result:
-                                map_result["success"] = True
-                        except Exception as exc:
-                            map_result = {"success": False, "message": str(exc)}
-                        history.append({
-                            "step": step, "tool": "make_thematic_map", "args": {},
-                            "reason": "LST 反演完成后自动生成专题图", "result": map_result,
-                        })
-                        last_result = map_result
-                        emit("tool_result", {"tool": "make_thematic_map", "result": map_result, "ui_action": "RENDER_IMAGE"})
-                    final_answer = decision.get("answer", "任务完成。")
-                    emit("final_answer", {"content": final_answer})
-                    break
+                final_answer = decision.get("answer", "任务完成。")
+                emit("final_answer", {"content": final_answer})
+                break
 
             # ── 4. ask_user ──
             if decision.get("type") == "ask_user":
@@ -440,8 +361,7 @@ class AgentLoop:
                     "options": decision.get("options", []),
                 })
                 return {
-                    "success": True,
-                    "type": "ask_user",
+                    "success": True, "type": "ask_user",
                     "question": decision.get("question", ""),
                     "options": decision.get("options", []),
                     "history": history,
@@ -454,101 +374,13 @@ class AgentLoop:
                 emit("error", {"message": final_answer})
                 break
 
-            tool = str(decision.get("tool", "")).strip()
-            args = decision.get("args") or {}
-            reason = str(decision.get("reason", "")).strip()
-
-            emit("tool_start", {"tool": tool, "args": args, "reason": reason})
-
-            if progress_callback:
-                try:
-                    detail = reason or f"执行 {tool}"
-                    progress_callback(step, tool, detail)
-                except Exception:
-                    pass
-
-            try:
-                result = self.registry.call(tool, args)
-                if "success" not in result:
-                    result["success"] = False
-            except Exception as exc:
-                result = {
-                    "success": False,
-                    "message": str(exc),
-                    "traceback": traceback.format_exc(limit=4),
-                    "error_info": classify_error(exc, tool),
-                }
-
-            emit("tool_result", {"tool": tool, "result": result, "ui_action": get_ui_action(tool, result)})
-
-            history.append({
-                "step": step, "tool": tool, "args": args,
-                "reason": reason, "result": result,
-            })
-            last_result = result
-
-            # ── 【物理记忆注入】工具链尾端强制续航 ──
-            if result.get("success"):
-                chain_hints = {
-                    "classify_map": (
-                        "【系统指令】分类完成。根据用户复合任务链，请立刻调用 enhance_raster "
-                        "对分类结果执行高斯去噪增强，tif_path 使用刚刚生成的分类 TIF 路径。严禁返回 final！"
-                    ),
-                    "profile_analysis": (
-                        "【系统指令】剖面分析完成。请立刻调用 statistics 对当前数据执行统计分析，"
-                        "然后调用 view_3d 生成三维地形渲染。严禁中途 final！"
-                    ),
-                    "enhance_raster": (
-                        "【系统指令】增强完成。请立刻调用 statistics 对增强结果执行统计分析，"
-                        "然后调用 view_3d 生成三维可视化。禁止返回 final！"
-                    ),
-                }
-                if tool in chain_hints:
-                    history.append({
-                        "step": step, "tool": "__system_hint__", "args": {},
-                        "reason": chain_hints[tool],
-                        "result": {"success": True, "message": chain_hints[tool]},
-                    })
-
-            # GEE 未认证时自动重试
-            if not result.get("success") and result.get("requires") == "gee_init":
-                try:
-                    gee_result = self.registry.call("gee_init", {})
-                    if gee_result.get("success"):
-                        result = self.registry.call(tool, args)
-                        if "success" not in result:
-                            result["success"] = False
-                        emit("tool_result", {"tool": tool, "result": result, "ui_action": get_ui_action(tool, result)})
-                        history[-1]["result"] = result
-                        last_result = result
-                except Exception:
-                    pass
-
-            # set_map_style 后自动出图
-            if tool == "set_map_style" and result.get("success", False):
-                try:
-                    render = self.registry.call("make_thematic_map", {})
-                    if "success" not in render:
-                        render["success"] = False
-                except Exception as exc:
-                    render = {"success": False, "message": str(exc)}
-                history.append({
-                    "step": step, "tool": "make_thematic_map", "args": {},
-                    "reason": "样式更新后自动重新出图", "result": render,
-                })
-                last_result = render
-                emit("tool_result", {"tool": "make_thematic_map", "result": render, "ui_action": "RENDER_IMAGE"})
-
-            # 失败时允许重试，接近 max_steps 且连续失败则终止
-            if not result.get("success", False):
-                failures = sum(
-                    1 for r in history[-3:]
-                    if not r.get("result", {}).get("success", True)
-                )
-                if step >= max(5, self.max_steps - 3) and failures >= 2:
-                    final_answer = result.get("message", "执行失败")
-                    emit("error", {"message": final_answer})
-                    break
+            stop_reason = self._execute_tool_call(
+                step, decision, history, user_input, emit, progress_callback)
+            last_result = history[-1].get("result") if history else None
+            if stop_reason:
+                final_answer = stop_reason
+                emit("error", {"message": final_answer})
+                break
         else:
             if history and history[-1].get("result", {}).get("success"):
                 last_msg = history[-1]["result"].get("message", "")
