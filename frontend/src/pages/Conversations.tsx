@@ -3,47 +3,11 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { Plus, Trash2, MessageSquare, Loader2, Activity, GripVertical, PanelLeftClose, PanelLeft } from 'lucide-react'
 import { useAppStore } from '../stores/appStore'
 import { useSessionState } from '../hooks/useSessionState'
-import { conversationsApi } from '../api/conversations'
+import { conversationsService } from '../services/conversations'
 import { ChatPanel } from '../components/chat/ChatPanel'
 import { CanvasPanel } from '../components/chat/CanvasPanel'
 import type { Message, OutputFile, ToolCall } from '../types/conversation'
-
-function extractFilesFromResult(result: Record<string, unknown> | undefined): OutputFile[] {
-  if (!result || !result.success) return []
-  const files: OutputFile[] = []
-  const keys = ['output_png', 'output_tif', 'output_gif', 'output_html', 'output_csv']
-  for (const key of keys) {
-    const path = result[key]
-    if (typeof path === 'string' && path) {
-      const name = path.replace(/\\/g, '/').split('/').pop() || path
-      if (name) files.push({ name, path: path as string, size: 0, modified: new Date().toISOString() })
-    }
-  }
-  const of = result.output_files
-  if (Array.isArray(of)) {
-    for (const f of of) {
-      if (f && typeof f === 'object' && f.name) {
-        files.push({
-          name: String(f.name),
-          path: String(f.path || f.name),
-          relative_path: f.relative_path ? String(f.relative_path) : undefined,
-          size: Number(f.size || 0),
-          modified: String(f.modified || new Date().toISOString()),
-        })
-      }
-    }
-  }
-  return files
-}
-
-function formatTime(iso: string) {
-  const d = new Date(iso)
-  const diff = Date.now() - d.getTime()
-  if (diff < 60000) return '刚刚'
-  if (diff < 3600000) return `${Math.floor(diff / 60000)}分钟前`
-  if (diff < 86400000) return `${Math.floor(diff / 3600000)}小时前`
-  return d.toLocaleDateString()
-}
+import { extractFilesFromResult, formatTime } from '../utils/workspace'
 
 export default function Conversations() {
   const navigate = useNavigate()
@@ -166,7 +130,7 @@ export default function Conversations() {
     stopPolling()
     pollRef.current = setInterval(async () => {
       try {
-        const result = await conversationsApi.getMessages(cId, 100)
+        const result = await conversationsService.getMessages(cId, { limit: 100 })
         if (result.messages.length > 0) {
           const lastMsg = result.messages[result.messages.length - 1]
           if (lastMsg.id > lastMsgIdRef.current) {
@@ -182,8 +146,16 @@ export default function Conversations() {
               return merged.sort((a, b) => a.id - b.id)
             })
             const files: OutputFile[] = []
+            const seenNames = new Set<string>()
             for (const msg of result.messages) {
-              if (msg.tool_result) files.push(...extractFilesFromResult(msg.tool_result as Record<string, unknown>))
+              if (msg.tool_result) {
+                for (const f of extractFilesFromResult(msg.tool_result as Record<string, unknown>)) {
+                  if (!seenNames.has(f.name)) {
+                    seenNames.add(f.name)
+                    files.push(f)
+                  }
+                }
+              }
             }
             setOutputFiles(prev => { const ex = new Set(prev.map(f => f.name)); const nf = files.filter(f => !ex.has(f.name)); return nf.length > 0 ? [...prev, ...nf] : prev })
             if (lastMsg.role === 'assistant') { setRecovering(false); setRecoveringToolName(null); setRecoveringStepNumber(null); stopPolling(); fetchConversations(true) }
@@ -198,8 +170,8 @@ export default function Conversations() {
     setLoadingMessages(true)
     try {
       const [result, convDetail] = await Promise.all([
-        conversationsApi.getMessages(cId, 100),
-        conversationsApi.get(cId),
+        conversationsService.getMessages(cId, { limit: 100 }),
+        conversationsService.getConversation(cId),
       ])
       setLocalMessages(result.messages)
       const files: OutputFile[] = []
@@ -233,7 +205,15 @@ export default function Conversations() {
   }, [convId, loadMessages, setActiveConversation, stopPolling])
 
   const handleNew = async () => { const nid = await createConversation(); if (nid) navigate(`/conversations/${nid}`) }
-  const handleDelete = async (cid: number) => { await deleteConversation(cid); if (convId === cid) navigate('/conversations') }
+  const handleDelete = async (cid: number) => {
+    // 清理 sessionStorage 中的会话状态
+    try {
+      sessionStorage.removeItem(`conv_${cid}_msgs`)
+      sessionStorage.removeItem(`conv_${cid}_files`)
+    } catch {}
+    await deleteConversation(cid)
+    if (convId === cid) navigate('/conversations')
+  }
   const handleNewMsg = (msg: Message) => {
     setLocalMessages(p => {
       // 如果是 SSE 生成的 assistant 消息（id 为 Date.now() 的大数值），
@@ -246,7 +226,7 @@ export default function Conversations() {
       fetchConversations(true)
       setTimeout(async () => {
         try {
-          const result = await conversationsApi.getMessages(convId, 100)
+          const result = await conversationsService.getMessages(convId, { limit: 100 })
           // 直接用 DB 权威消息替换，避免 SSE 临时消息（Date.now() ID）与 DB 消息重复
           setLocalMessages(result.messages)
           // 从 DB 消息提取文件，按文件名去重
@@ -269,7 +249,11 @@ export default function Conversations() {
   }
   const handleToolResult = (call: ToolCall) => {
     const files = extractFilesFromResult(call.result)
-    if (files.length > 0) setOutputFiles(p => { const ex = new Set(p.map(f => f.name)); const nf = files.filter(f => !ex.has(f.name)); return nf.length > 0 ? [...p, ...nf] : p })
+    if (files.length > 0) setOutputFiles(p => {
+      const ex = new Set(p.map(f => f.name))
+      const nf = files.filter(f => !ex.has(f.name))
+      return nf.length > 0 ? [...p, ...nf] : p
+    })
   }
 
   const handleSendStart = useCallback(() => { fetchConversations(true) }, [fetchConversations])

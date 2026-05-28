@@ -136,10 +136,22 @@ def get_conversation_messages(
 
 
 def delete_conversation(db: Session, conversation_id: int) -> bool:
-    """删除会话（级联删除消息和状态）。"""
+    """删除会话（级联删除消息、状态和文件）。"""
     conv = db.query(Conversation).filter(Conversation.id == conversation_id).first()
     if not conv:
         return False
+
+    # 删除文件系统中的会话目录
+    import shutil
+    from pathlib import Path
+    from config import OUTPUTS_DIR
+    session_dir = Path(OUTPUTS_DIR) / f"session_{conversation_id}"
+    if session_dir.exists():
+        try:
+            shutil.rmtree(session_dir)
+        except Exception:
+            pass  # 忽略文件删除错误，确保数据库记录能正常删除
+
     db.delete(conv)
     db.commit()
     return True
@@ -153,29 +165,42 @@ def save_conversation_state(
     state: Dict[str, Any],
 ) -> None:
     """保存 GISRuntime 状态到 conversation_states 表。"""
-    existing = (
-        db.query(ConversationState)
-        .filter(ConversationState.conversation_id == conversation_id)
-        .first()
-    )
-
-    # 将复杂类型序列化为 JSON 字符串
-    prepared = dict(state)
-    if "last_region_geojson" in prepared and isinstance(prepared["last_region_geojson"], dict):
-        prepared["last_region_geojson"] = json.dumps(
-            prepared["last_region_geojson"], ensure_ascii=False
+    try:
+        existing = (
+            db.query(ConversationState)
+            .filter(ConversationState.conversation_id == conversation_id)
+            .first()
         )
 
-    if existing:
-        for key, value in prepared.items():
-            if hasattr(existing, key):
-                setattr(existing, key, value)
-    else:
-        prepared["conversation_id"] = conversation_id
-        new_state = ConversationState(**prepared)
-        db.add(new_state)
+        # 将复杂类型序列化为 JSON 字符串
+        prepared = dict(state)
+        if "last_region_geojson" in prepared and isinstance(prepared["last_region_geojson"], dict):
+            prepared["last_region_geojson"] = json.dumps(
+                prepared["last_region_geojson"], ensure_ascii=False
+            )
 
-    db.commit()
+        # 过滤掉 ConversationState 模型不支持的字段
+        # output_files 是运行时临时数据，不需要持久化到数据库
+        prepared.pop("output_files", None)
+        prepared.pop("conversation_id", None)
+
+        if existing:
+            for key, value in prepared.items():
+                if hasattr(existing, key):
+                    setattr(existing, key, value)
+        else:
+            prepared["conversation_id"] = conversation_id
+            new_state = ConversationState(**prepared)
+            db.add(new_state)
+
+        db.commit()
+        logger.info(f"[State] 保存成功 conv={conversation_id} current_dataset={state.get('current_dataset')}")
+    except Exception as e:
+        logger.error(f"[State] 保存失败 conv={conversation_id}: {e}", exc_info=True)
+        try:
+            db.rollback()
+        except Exception:
+            pass
 
 
 def load_conversation_state(
@@ -189,8 +214,10 @@ def load_conversation_state(
         .first()
     )
     if not state:
+        logger.info(f"[State] 未找到 conv={conversation_id} 的状态")
         return None
 
+    logger.info(f"[State] 加载成功 conv={conversation_id} current_dataset={state.current_dataset}")
     result = {
         "current_dataset": state.current_dataset,
         "source_dataset": state.source_dataset,
