@@ -137,23 +137,33 @@ def get_conversation_messages(
 
 def delete_conversation(db: Session, conversation_id: int) -> bool:
     """删除会话（级联删除消息、状态和文件）。"""
-    conv = db.query(Conversation).filter(Conversation.id == conversation_id).first()
-    if not conv:
-        return False
-
-    # 删除文件系统中的会话目录
     import shutil
     from pathlib import Path
     from config import OUTPUTS_DIR
+
+    print(f"[Delete] 开始删除会话: {conversation_id}")
+
+    conv = db.query(Conversation).filter(Conversation.id == conversation_id).first()
+    if not conv:
+        print(f"[Delete] 会话 {conversation_id} 不存在")
+        return False
+
+    # 删除文件系统中的会话目录
     session_dir = Path(OUTPUTS_DIR) / f"session_{conversation_id}"
+    print(f"[Delete] 检查会话目录: {session_dir}, 存在: {session_dir.exists()}")
     if session_dir.exists():
         try:
             shutil.rmtree(session_dir)
-        except Exception:
-            pass  # 忽略文件删除错误，确保数据库记录能正常删除
+            print(f"[Delete] 删除会话目录成功: {session_dir}")
+        except Exception as e:
+            print(f"[Delete] 删除会话目录失败: {session_dir}, 错误: {e}")
+            # 忽略文件删除错误，确保数据库记录能正常删除
+    else:
+        print(f"[Delete] 会话目录不存在: {session_dir}")
 
     db.delete(conv)
     db.commit()
+    print(f"[Delete] 删除会话成功: {conversation_id}")
     return True
 
 
