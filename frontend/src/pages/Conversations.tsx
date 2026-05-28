@@ -229,20 +229,17 @@ export default function Conversations() {
           const result = await conversationsService.getMessages(convId, { limit: 100 })
           // 直接用 DB 权威消息替换，避免 SSE 临时消息（Date.now() ID）与 DB 消息重复
           setLocalMessages(result.messages)
-          // 从 DB 消息提取文件，按文件名去重
-          const files: OutputFile[] = []
-          const seenNames = new Set<string>()
+          // 从 DB 消息提取文件，按路径去重，保留最新
+          const seenPaths = new Map<string, OutputFile>()
           for (const m of result.messages) {
             if (m.tool_result) {
               for (const f of extractFilesFromResult(m.tool_result as Record<string, unknown>)) {
-                if (!seenNames.has(f.name)) {
-                  seenNames.add(f.name)
-                  files.push(f)
-                }
+                const key = f.path || f.name
+                seenPaths.set(key, f)  // 后来的覆盖先前的，保留最新
               }
             }
           }
-          setOutputFiles(files)
+          setOutputFiles(Array.from(seenPaths.values()))
         } catch { /* ignore */ }
       }, 1200)
     }
@@ -250,8 +247,8 @@ export default function Conversations() {
   const handleToolResult = (call: ToolCall) => {
     const files = extractFilesFromResult(call.result)
     if (files.length > 0) setOutputFiles(p => {
-      const ex = new Set(p.map(f => f.name))
-      const nf = files.filter(f => !ex.has(f.name))
+      const ex = new Set(p.map(f => f.path || f.name))
+      const nf = files.filter(f => !ex.has(f.path || f.name))
       return nf.length > 0 ? [...p, ...nf] : p
     })
   }

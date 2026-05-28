@@ -71,12 +71,14 @@ export function CanvasPanel({ files, onFileClick }: Props) {
   // 包装 setter：同时根据 name 在 files 中查找最新引用
   const setLeftFile = useCallback((f: OutputFile | null) => {
     if (!f) { setLeftFileRaw(null); return }
-    const latest = files.find(x => x.name === f.name)
+    const key = f.path || f.name
+    const latest = files.find(x => (x.path || x.name) === key)
     setLeftFileRaw(latest || f)
   }, [files])
   const setRightFile = useCallback((f: OutputFile | null) => {
     if (!f) { setRightFileRaw(null); return }
-    const latest = files.find(x => x.name === f.name)
+    const key = f.path || f.name
+    const latest = files.find(x => (x.path || x.name) === key)
     setRightFileRaw(latest || f)
   }, [files])
 
@@ -106,7 +108,7 @@ export function CanvasPanel({ files, onFileClick }: Props) {
       return
     }
     setActiveFile(prev => {
-      if (prev && files.some(f => f.name === prev.name)) return prev
+      if (prev && files.some(f => (f.path || f.name) === (prev.path || prev.name))) return prev
       const img = files.find(f => isBrowserViewable(f.name))
       return img || files[files.length - 1]
     })
@@ -260,10 +262,11 @@ export function CanvasPanel({ files, onFileClick }: Props) {
       <div className="flex items-center gap-0.5 px-2 py-1.5 border-b border-gray-50 overflow-x-auto flex-shrink-0">
         {files.map(f => {
           const c = getCategory(f.name)
-          const isActive = activeFile?.name === f.name
+          const fileKey = f.path || f.name
+          const isActive = (activeFile?.path || activeFile?.name) === fileKey
           return (
             <button
-              key={f.path || f.name}
+              key={fileKey}
               onClick={() => { setActiveFile(f); setCompareMode(false); onFileClick?.(f) }}
               className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs whitespace-nowrap transition-colors flex-shrink-0 ${
                 isActive
