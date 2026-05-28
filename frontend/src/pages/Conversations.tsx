@@ -145,19 +145,22 @@ export default function Conversations() {
               }
               return merged.sort((a, b) => a.id - b.id)
             })
-            const files: OutputFile[] = []
-            const seenNames = new Set<string>()
+            // 按路径去重，保留最新
+            const seenPaths = new Map<string, OutputFile>()
             for (const msg of result.messages) {
               if (msg.tool_result) {
                 for (const f of extractFilesFromResult(msg.tool_result as Record<string, unknown>)) {
-                  if (!seenNames.has(f.name)) {
-                    seenNames.add(f.name)
-                    files.push(f)
-                  }
+                  const key = f.path || f.name
+                  seenPaths.set(key, f)
                 }
               }
             }
-            setOutputFiles(prev => { const ex = new Set(prev.map(f => f.name)); const nf = files.filter(f => !ex.has(f.name)); return nf.length > 0 ? [...prev, ...nf] : prev })
+            const files = Array.from(seenPaths.values())
+            setOutputFiles(prev => {
+              const ex = new Set(prev.map(f => f.path || f.name))
+              const nf = files.filter(f => !ex.has(f.path || f.name))
+              return nf.length > 0 ? [...prev, ...nf] : prev
+            })
             if (lastMsg.role === 'assistant') { setRecovering(false); setRecoveringToolName(null); setRecoveringStepNumber(null); stopPolling(); fetchConversations(true) }
             else extractRecoveringStep(result.messages)
           }
@@ -174,9 +177,17 @@ export default function Conversations() {
         conversationsService.getConversation(cId),
       ])
       setLocalMessages(result.messages)
-      const files: OutputFile[] = []
-      for (const msg of result.messages) { if (msg.tool_result) files.push(...extractFilesFromResult(msg.tool_result as Record<string, unknown>)) }
-      setOutputFiles(files)
+      // 按路径去重，保留最新
+      const seenPaths = new Map<string, OutputFile>()
+      for (const msg of result.messages) {
+        if (msg.tool_result) {
+          for (const f of extractFilesFromResult(msg.tool_result as Record<string, unknown>)) {
+            const key = f.path || f.name
+            seenPaths.set(key, f)
+          }
+        }
+      }
+      setOutputFiles(Array.from(seenPaths.values()))
       if (result.messages.length > 0) lastMsgIdRef.current = result.messages[result.messages.length - 1].id
       if (convDetail.status === 'processing') {
         extractRecoveringStep(result.messages)
