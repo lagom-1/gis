@@ -16,7 +16,7 @@ export function renderMarkdown(text: string): string {
 export function extractFilesFromResult(result: Record<string, unknown> | undefined): OutputFile[] {
   if (!result || !result.success) return []
   const files: OutputFile[] = []
-  const keys = ['output_png', 'output_tif', 'output_gif', 'output_html', 'output_csv']
+  const keys = ['output_png', 'output_tif', 'output_gif', 'output_html', 'output_csv', 'histogram_png']
   for (const key of keys) {
     const path = result[key]
     if (typeof path === 'string' && path) {
