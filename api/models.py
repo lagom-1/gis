@@ -16,6 +16,7 @@ from sqlalchemy import (
     Column,
     DateTime,
     Enum,
+    Float,
     ForeignKey,
     Integer,
     String,
@@ -228,6 +229,40 @@ class Download(Base):
     task = relationship("Task", back_populates="downloads")
 
 
+class ShareRecord(Base):
+    """分享记录表"""
+    __tablename__ = "share_records"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    task_id = Column(Integer, ForeignKey("tasks.id"), nullable=False, index=True)
+    shared_at = Column(DateTime, server_default=func.now(), nullable=False)
+    week_number = Column(Integer, nullable=False, comment="ISO 周数")
+    year = Column(Integer, nullable=False, comment="年份")
+
+    # 关系
+    user = relationship("User")
+    task = relationship("Task")
+
+
+class PaymentRecord(Base):
+    """支付记录表"""
+    __tablename__ = "payment_records"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    task_id = Column(Integer, ForeignKey("tasks.id"), nullable=False, index=True)
+    amount_yuan = Column(Float, nullable=False, comment="金额（元）")
+    status = Column(String(20), default="pending", nullable=False, comment="pending/paid/cancelled")
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    paid_at = Column(DateTime, nullable=True, comment="支付时间")
+    confirmed_at = Column(DateTime, nullable=True, comment="确认时间")
+
+    # 关系
+    user = relationship("User")
+    task = relationship("Task")
+
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  Pydantic 模型（请求 / 响应）
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -393,3 +428,64 @@ class ConversationStateResponse(BaseModel):
     map_style: Optional[Dict[str, Any]] = None
 
     model_config = {"from_attributes": True}
+
+
+class SendCodeRequest(BaseModel):
+    email: str
+
+class LoginWithCodeRequest(BaseModel):
+    email: str
+    code: str
+
+
+# ── 分享 / 下载权限 ──────────────────────────────────────
+
+
+class ShareRecordResponse(BaseModel):
+    """分享记录响应"""
+    id: int
+    user_id: int
+    task_id: int
+    shared_at: datetime
+    week_number: int
+    year: int
+
+    model_config = {"from_attributes": True}
+
+
+class PaymentRecordResponse(BaseModel):
+    """支付记录响应"""
+    id: int
+    user_id: int
+    task_id: int
+    amount_yuan: float
+    status: str
+    created_at: datetime
+    paid_at: Optional[datetime] = None
+    confirmed_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
+class DownloadPermissionResponse(BaseModel):
+    """下载权限响应"""
+    can_download: bool
+    download_type: Optional[str] = None
+    share_remaining: int
+    price_yuan: float
+    payment_status: Optional[str] = None
+
+
+class ShareRequest(BaseModel):
+    """分享请求"""
+    task_id: int
+
+
+class PaymentCreateRequest(BaseModel):
+    """创建支付请求"""
+    task_id: int
+
+
+class PaymentConfirmRequest(BaseModel):
+    """确认支付请求"""
+    payment_id: int

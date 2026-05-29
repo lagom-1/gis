@@ -17,7 +17,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 import config
-from api.models import Order, OrderStatus, Task, TaskStatus, User
+from api.models import Order, OrderStatus, PaymentRecord, ShareRecord, Task, TaskStatus, User
 
 logger = logging.getLogger(__name__)
 
@@ -411,45 +411,88 @@ def get_order_status(db: Session, order_id: int, user_id: int) -> Order:
     return order
 
 
-def check_download_permission(db: Session, task_id: int, user_id: int, file_type: str = "png") -> Order:
+def calculate_price(task: Task) -> float:
     """
-    检查用户是否有权限下载指定类型的文件
+    根据任务的 API token 消耗计算价格
 
-    Args:
-        db: 数据库会话
-        task_id: 任务 ID
-        user_id: 用户 ID
-        file_type: 文件类型 (png/html/tif/gif/report)
-
-    Returns:
-        已支付的 Order 对象
-
-    Raises:
-        HTTPException: 无权下载
+    公式：token 费用 × 2 倍
+    最低 1 元，最高 100 元
     """
-    # 查找已支付的订单
-    order = db.query(Order).filter(
-        Order.task_id == task_id,
-        Order.user_id == user_id,
-        Order.status == OrderStatus.PAID,
+    # 估算 token 消耗（基于输入文本长度）
+    input_tokens = len(task.input_text) * 2
+    output_tokens = 1000
+
+    # DeepSeek 价格：约 0.001 元/1000 tokens
+    token_cost = (input_tokens + output_tokens) / 1000 * 0.001
+
+    # 应用倍数
+    price = token_cost * 2
+
+    # 限制范围
+    price = max(1.0, min(100.0, price))
+
+    # 保留两位小数
+    return round(price, 2)
+
+
+def get_share_count(db: Session, user_id: int) -> int:
+    """获取用户本周的分享次数"""
+    from datetime import datetime
+    now = datetime.now()
+    week_number = now.isocalendar()[1]
+    year = now.year
+
+    count = db.query(ShareRecord).filter(
+        ShareRecord.user_id == user_id,
+        ShareRecord.week_number == week_number,
+        ShareRecord.year == year,
+    ).count()
+
+    return count
+
+
+def check_download_permission(db: Session, user_id: int, task_id: int) -> dict:
+    """
+    检查用户是否有下载权限
+
+    返回：
+    - can_download: 是否可以下载
+    - download_type: 下载类型（share/payment/None）
+    - share_remaining: 剩余分享次数
+    - price_yuan: 价格
+    - payment_status: 支付状态
+    """
+    # 检查是否已有付费记录
+    payment = db.query(PaymentRecord).filter(
+        PaymentRecord.user_id == user_id,
+        PaymentRecord.task_id == task_id,
+        PaymentRecord.status == "paid",
     ).first()
 
-    if order is None:
-        raise HTTPException(
-            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail="请先支付后再下载",
-        )
+    if payment:
+        return {
+            "can_download": True,
+            "download_type": "payment",
+            "share_remaining": 3 - get_share_count(db, user_id),
+            "price_yuan": payment.amount_yuan,
+            "payment_status": "paid",
+        }
 
-    # 检查层级是否包含该文件类型
-    # 根据订单金额反推层级
-    tier = _infer_tier_from_amount(order.amount_cents, order.currency)
-    if tier and file_type not in PRICING_TIERS.get(tier, {}).get("includes", []):
-        raise HTTPException(
-            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail=f"当前套餐不包含 {file_type} 类型文件，请升级套餐",
-        )
+    # 检查分享次数
+    share_count = get_share_count(db, user_id)
+    share_remaining = max(0, 3 - share_count)
 
-    return order
+    # 计算价格
+    task = db.query(Task).filter(Task.id == task_id).first()
+    price = calculate_price(task) if task else 1.0
+
+    return {
+        "can_download": share_remaining > 0,
+        "download_type": "share" if share_remaining > 0 else "payment",
+        "share_remaining": share_remaining,
+        "price_yuan": price,
+        "payment_status": None,
+    }
 
 
 def _infer_tier_from_amount(amount_cents: int, currency: str) -> Optional[str]:

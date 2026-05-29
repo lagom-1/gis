@@ -1,23 +1,30 @@
 import { useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
-import { useAuthStore } from '../stores/authStore'
+import { useAppStore } from '../stores/appStore'
 import { UserPlus, Loader2 } from 'lucide-react'
 
 export default function Register() {
   const navigate = useNavigate()
-  const { register, isLoading, error } = useAuthStore()
+  const register = useAppStore(s => s.register)
   const [username, setUsername] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [isLoading, setIsLoading] = useState(false)
+  const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!username.trim() || !email.trim() || !password.trim()) return
-    const ok = await register({ username: username.trim(), email: email.trim(), password })
+    setIsLoading(true)
+    setError('')
+    const ok = await register(username.trim(), email.trim(), password)
+    setIsLoading(false)
     if (ok) {
       setSuccess('注册成功！正在跳转登录...')
       setTimeout(() => navigate('/login'), 1500)
+    } else {
+      setError('注册失败，请检查输入信息')
     }
   }
 

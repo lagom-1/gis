@@ -1,15 +1,23 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
 import Layout from './components/Layout'
+import ProtectedRoute from './components/ProtectedRoute'
 import Home from './pages/Home'
 import Submit from './pages/Submit'
 import TaskPage from './pages/TaskPage'
 import Conversations from './pages/Conversations'
 import Gallery from './pages/Gallery'
+import Login from './pages/Login'
+import Register from './pages/Register'
 
 export default function App() {
   return (
     <Routes>
-      <Route path="/" element={<Layout />}>
+      {/* 登录/注册页面 - 独立布局 */}
+      <Route path="/login" element={<Login />} />
+      <Route path="/register" element={<Register />} />
+
+      {/* 主应用 - 需要登录 */}
+      <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
         <Route index element={<Home />} />
         <Route path="submit" element={<Submit />} />
         <Route path="tasks/:id" element={<TaskPage />} />

@@ -6,10 +6,12 @@ import {
 import type { OutputFile } from '../../types/conversation'
 import ViewerRouter from '../ViewerRouter'
 import CompareSlider from '../CompareSlider'
+import PaymentModal from '../PaymentModal'
 
 interface Props {
   files: OutputFile[]
   onFileClick?: (file: OutputFile) => void
+  taskId?: number
 }
 
 function getCategory(name: string) {
@@ -53,10 +55,11 @@ function buildFileUrl(f: OutputFile): string {
   return '/outputs/' + encodeURIComponent(f.name)
 }
 
-export function CanvasPanel({ files, onFileClick }: Props) {
+export function CanvasPanel({ files, onFileClick, taskId }: Props) {
   const [activeFile, setActiveFile] = useState<OutputFile | null>(null)
   const [compareMode, setCompareMode] = useState(false)
   const [lightbox, setLightbox] = useState(false)
+  const [showPayment, setShowPayment] = useState(false)
 
   // 可对比的图片文件
   const comparableImages = useMemo(
@@ -99,6 +102,20 @@ export function CanvasPanel({ files, onFileClick }: Props) {
       setRightFileRaw(null)
     }
   }, [compareMode])
+
+  // 下载处理
+  const handleDownload = useCallback(() => {
+    if (activeFile) {
+      setShowPayment(true)
+    }
+  }, [activeFile])
+
+  const handleDownloadConfirm = useCallback(() => {
+    if (activeFile) {
+      const url = getUrl(activeFile)
+      window.open(url, '_blank')
+    }
+  }, [activeFile])
 
   // 自动选择最新文件为激活
   useEffect(() => {
@@ -245,14 +262,13 @@ export function CanvasPanel({ files, onFileClick }: Props) {
               >
                 <Maximize2 className="h-3.5 w-3.5" />
               </button>
-              <a
-                href={activeUrl}
-                download={activeFile.name}
+              <button
+                onClick={handleDownload}
                 className="p-1.5 text-gray-400 hover:text-blue-500 rounded transition-colors"
                 title="下载"
               >
                 <Download className="h-3.5 w-3.5" />
-              </a>
+              </button>
             </>
           )}
         </div>
@@ -314,6 +330,15 @@ export function CanvasPanel({ files, onFileClick }: Props) {
           <div className="absolute bottom-4 left-1/2 -translate-x-1/2 text-sm text-white/50">{activeFile.name}</div>
         </div>
       )}
+
+      {/* 收费弹窗 */}
+      <PaymentModal
+        isOpen={showPayment}
+        onClose={() => setShowPayment(false)}
+        taskId={taskId}
+        filePath={activeFile?.path}
+        onDownload={handleDownloadConfirm}
+      />
     </div>
   )
 }

@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { FileImage, FileText, Download, X, ZoomIn, Play } from 'lucide-react'
 import ViewerRouter from './ViewerRouter'
+import { useAppStore } from '../stores/appStore'
+import PaymentModal from './PaymentModal'
 
 interface OutputFile {
   name: string
@@ -17,7 +19,10 @@ interface OutputPreviewProps {
 
 export default function OutputPreview({ files, taskId }: OutputPreviewProps) {
   const [previewFile, setPreviewFile] = useState<OutputFile | null>(null)
+  const [showPayment, setShowPayment] = useState(false)
+  const [downloadFile, setDownloadFile] = useState<OutputFile | null>(null)
   const isArray = Array.isArray(files)
+  const token = useAppStore((s) => s.token)
 
   const formatSize = (bytes: number) => {
     if (bytes < 1024) return bytes + ' B'
@@ -45,6 +50,9 @@ export default function OutputPreview({ files, taskId }: OutputPreviewProps) {
   }
 
   const getFileUrl = (file: OutputFile) => {
+    if (file.name.endsWith('.html') && token) {
+      return `/api/downloads/serve/${taskId}/${encodeURIComponent(file.name)}?token=${token}`
+    }
     return `/api/downloads/${taskId}/${encodeURIComponent(file.name)}`
   }
 
@@ -53,6 +61,18 @@ export default function OutputPreview({ files, taskId }: OutputPreviewProps) {
       return `/api/downloads/${taskId}/preview/${encodeURIComponent(file.name)}`
     }
     return getFileUrl(file)
+  }
+
+  const handleDownload = (file: OutputFile) => {
+    setDownloadFile(file)
+    setShowPayment(true)
+  }
+
+  const handleDownloadConfirm = () => {
+    if (downloadFile) {
+      const url = getFileUrl(downloadFile)
+      window.open(url, '_blank')
+    }
   }
 
   const handlePreview = (file: OutputFile) => {
@@ -65,7 +85,6 @@ export default function OutputPreview({ files, taskId }: OutputPreviewProps) {
       return <p className="text-gray-500">暂无输出文件</p>
     }
 
-    // 分类文件
     const gifFiles = fileList.filter(f => isGifFile(f.name))
     const imageFiles = fileList.filter(f => isImageFile(f.name))
     const otherFiles = fileList.filter(f => !isImageFile(f.name) && !isGifFile(f.name))
@@ -74,7 +93,7 @@ export default function OutputPreview({ files, taskId }: OutputPreviewProps) {
       <div className="space-y-6">
         <h4 className="font-medium text-gray-700">输出文件 ({fileList.length})</h4>
 
-        {/* GIF 动画 - 优先展示 */}
+        {/* GIF 动画 */}
         {gifFiles.length > 0 && (
           <div className="space-y-3">
             <h5 className="text-sm font-medium text-gray-600 flex items-center">
@@ -83,19 +102,9 @@ export default function OutputPreview({ files, taskId }: OutputPreviewProps) {
             </h5>
             <div className="grid grid-cols-1 gap-4">
               {gifFiles.map((file) => (
-                <div
-                  key={file.relative_path || file.name}
-                  className="bg-gray-50 rounded-lg overflow-hidden border"
-                >
-                  <div
-                    className="relative group cursor-pointer bg-black"
-                    onClick={() => handlePreview(file)}
-                  >
-                    <img loading="lazy"
-                      src={getPreviewUrl(file)}
-                      alt={file.name}
-                      className="w-full max-h-96 object-contain mx-auto"
-                    />
+                <div key={file.relative_path || file.name} className="bg-gray-50 rounded-lg overflow-hidden border">
+                  <div className="relative group cursor-pointer bg-black" onClick={() => handlePreview(file)}>
+                    <img loading="lazy" src={getPreviewUrl(file)} alt={file.name} className="w-full max-h-96 object-contain mx-auto" />
                     <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-30 transition-all flex items-center justify-center">
                       <ZoomIn className="h-12 w-12 text-white opacity-0 group-hover:opacity-100 transition-opacity" />
                     </div>
@@ -103,14 +112,13 @@ export default function OutputPreview({ files, taskId }: OutputPreviewProps) {
                   <div className="p-4">
                     <p className="font-medium text-gray-900">{file.name}</p>
                     <p className="text-sm text-gray-500 mt-1">{formatSize(file.size)}</p>
-                    <a
-                      href={getFileUrl(file)}
-                      download={file.name}
+                    <button
+                      onClick={() => handleDownload(file)}
                       className="mt-3 inline-flex items-center px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 text-sm"
                     >
                       <Download className="h-4 w-4 mr-2" />
                       下载 GIF 动画
-                    </a>
+                    </button>
                   </div>
                 </div>
               ))}
@@ -127,19 +135,9 @@ export default function OutputPreview({ files, taskId }: OutputPreviewProps) {
             </h5>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               {imageFiles.map((file) => (
-                <div
-                  key={file.relative_path || file.name}
-                  className="bg-gray-50 rounded-lg overflow-hidden border"
-                >
-                  <div
-                    className="relative group cursor-pointer h-48 bg-gray-100"
-                    onClick={() => handlePreview(file)}
-                  >
-                    <img loading="lazy"
-                      src={getPreviewUrl(file)}
-                      alt={file.name}
-                      className="w-full h-full object-contain"
-                    />
+                <div key={file.relative_path || file.name} className="bg-gray-50 rounded-lg overflow-hidden border">
+                  <div className="relative group cursor-pointer h-48 bg-gray-100" onClick={() => handlePreview(file)}>
+                    <img loading="lazy" src={getPreviewUrl(file)} alt={file.name} className="w-full h-full object-contain" />
                     <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-30 transition-all flex items-center justify-center">
                       <ZoomIn className="h-8 w-8 text-white opacity-0 group-hover:opacity-100 transition-opacity" />
                     </div>
@@ -147,14 +145,13 @@ export default function OutputPreview({ files, taskId }: OutputPreviewProps) {
                   <div className="p-3">
                     <p className="text-sm font-medium text-gray-900 truncate">{file.name}</p>
                     <p className="text-xs text-gray-500 mt-1">{formatSize(file.size)}</p>
-                    <a
-                      href={getFileUrl(file)}
-                      download={file.name}
+                    <button
+                      onClick={() => handleDownload(file)}
                       className="mt-2 inline-flex items-center text-xs text-primary-600 hover:text-primary-700"
                     >
                       <Download className="h-3 w-3 mr-1" />
                       下载
-                    </a>
+                    </button>
                   </div>
                 </div>
               ))}
@@ -162,7 +159,7 @@ export default function OutputPreview({ files, taskId }: OutputPreviewProps) {
           </div>
         )}
 
-        {/* 其他文件（CSV/HTML 可预览，其余仅下载） */}
+        {/* 其他文件 */}
         {otherFiles.length > 0 && (
           <div className="space-y-3">
             <h5 className="text-sm font-medium text-gray-600 flex items-center">
@@ -173,44 +170,35 @@ export default function OutputPreview({ files, taskId }: OutputPreviewProps) {
               {otherFiles.map((file) => {
                 const canPreview = file.name.endsWith('.html') || file.name.endsWith('.htm') || file.name.endsWith('.csv')
                 return (
-                <div
-                  key={file.relative_path || file.name}
-                  className={`flex items-center justify-between p-3 bg-gray-50 rounded-lg border ${
-                    canPreview ? 'cursor-pointer hover:bg-gray-100 transition-colors' : ''
-                  }`}
-                  onClick={canPreview ? () => handlePreview(file) : undefined}
-                >
-                  <div className="flex items-center space-x-3 min-w-0">
-                    {getFileIcon(file.name)}
-                    <div className="min-w-0">
-                      <p className={`text-sm truncate ${canPreview ? 'font-medium text-primary-700' : 'font-medium text-gray-900'}`}>{file.name}</p>
-                      <p className="text-xs text-gray-500">{formatSize(file.size)}</p>
-                    </div>
-                  </div>
-                  <a
-                    href={getFileUrl(file)}
-                    download={file.name}
-                    className="ml-2 p-2 text-gray-400 hover:text-primary-600"
-                    onClick={(e) => e.stopPropagation()}
+                  <div
+                    key={file.relative_path || file.name}
+                    className={`flex items-center justify-between p-3 bg-gray-50 rounded-lg border ${canPreview ? 'cursor-pointer hover:bg-gray-100 transition-colors' : ''}`}
+                    onClick={canPreview ? () => handlePreview(file) : undefined}
                   >
-                    <Download className="h-4 w-4" />
-                  </a>
-                </div>
-              )})}
+                    <div className="flex items-center space-x-3 min-w-0">
+                      {getFileIcon(file.name)}
+                      <div className="min-w-0">
+                        <p className={`text-sm truncate ${canPreview ? 'font-medium text-primary-700' : 'font-medium text-gray-900'}`}>{file.name}</p>
+                        <p className="text-xs text-gray-500">{formatSize(file.size)}</p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleDownload(file) }}
+                      className="ml-2 p-2 text-gray-400 hover:text-primary-600"
+                    >
+                      <Download className="h-4 w-4" />
+                    </button>
+                  </div>
+                )
+              })}
             </div>
           </div>
         )}
 
-        {/* 预览弹窗 — 使用智能查看器 */}
+        {/* 预览弹窗 */}
         {previewFile && (
-          <div
-            className="fixed inset-0 z-50 bg-black bg-opacity-90 flex items-center justify-center p-4"
-            onClick={() => setPreviewFile(null)}
-          >
-            <button
-              className="absolute top-4 right-4 text-white hover:text-gray-300 z-10"
-              onClick={() => setPreviewFile(null)}
-            >
+          <div className="fixed inset-0 z-40 bg-black bg-opacity-90 flex items-center justify-center p-4" onClick={() => setPreviewFile(null)}>
+            <button className="absolute top-4 right-4 text-white hover:text-gray-300 z-10" onClick={() => setPreviewFile(null)}>
               <X className="h-8 w-8" />
             </button>
             <div className="w-full max-w-5xl max-h-full bg-white rounded-xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
@@ -220,19 +208,27 @@ export default function OutputPreview({ files, taskId }: OutputPreviewProps) {
                 </div>
                 <div className="p-3 border-t flex items-center justify-between flex-shrink-0">
                   <span className="text-sm text-gray-700 font-medium truncate">{previewFile.name}</span>
-                  <a
-                    href={getFileUrl(previewFile)}
-                    download={previewFile.name}
+                  <button
+                    onClick={() => handleDownload(previewFile)}
                     className="inline-flex items-center px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 text-sm"
                   >
                     <Download className="h-4 w-4 mr-2" />
                     下载
-                  </a>
+                  </button>
                 </div>
               </div>
             </div>
           </div>
         )}
+
+        {/* 收费弹窗 */}
+        <PaymentModal
+          isOpen={showPayment}
+          onClose={() => setShowPayment(false)}
+          taskId={taskId}
+          filePath={downloadFile?.path}
+          onDownload={handleDownloadConfirm}
+        />
       </div>
     )
   }
@@ -250,10 +246,7 @@ export default function OutputPreview({ files, taskId }: OutputPreviewProps) {
         {fileEntries.map(([key, path]) => {
           const filename = path.split('/').pop() || path
           return (
-            <div
-              key={key}
-              className="flex items-center justify-between p-3 bg-gray-50 rounded-lg"
-            >
+            <div key={key} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
               <div className="flex items-center space-x-3 min-w-0">
                 {getFileIcon(filename)}
                 <div className="min-w-0">

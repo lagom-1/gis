@@ -44,6 +44,7 @@ interface AppState {
 
   // 历史
   recentTasks: Task[]
+  currentTask: Task | null
   isLoadingTasks: boolean
 
   // 会话
@@ -66,6 +67,7 @@ interface AppState {
   register: (username: string, email: string, password: string) => Promise<boolean>
   logout: () => void
   fetchUser: () => Promise<void>
+  setUser: (user: User | null) => void
 
   // Actions - 对话
   addMessage: (msg: Omit<Message, 'id' | 'timestamp'>) => void
@@ -85,6 +87,7 @@ interface AppState {
 
   // Actions - 任务
   fetchRecentTasks: (silent?: boolean) => Promise<void>
+  fetchTask: (taskId: number, silent?: boolean) => Promise<void>
   createTask: (input: string) => Promise<Task>
   cancelTask: (taskId: number) => Promise<void>
 
@@ -158,6 +161,7 @@ export const useAppStore = create<AppState>()(
       sidebarCollapsed: false,
       activeTab: 'chat',
       recentTasks: [],
+      currentTask: null,
       isLoadingTasks: false,
       activeConversationId: null,
       conversations: [],
@@ -188,6 +192,7 @@ export const useAppStore = create<AppState>()(
         if (!token) return
         try { const user = await authService.getMe(); set({ user }) } catch { /* token expired */ }
       },
+      setUser: (user) => set({ user }),
 
       // ── 对话 ──
       addMessage: (msg) => {
@@ -217,6 +222,13 @@ export const useAppStore = create<AppState>()(
         try {
           const tasks = await tasksService.getTasks()
           set({ recentTasks: tasks, isLoadingTasks: false })
+        } catch { set({ isLoadingTasks: false }) }
+      },
+      fetchTask: async (taskId, silent) => {
+        if (!silent) set({ isLoadingTasks: true })
+        try {
+          const task = await tasksService.getTask(taskId)
+          set({ currentTask: task, isLoadingTasks: false })
         } catch { set({ isLoadingTasks: false }) }
       },
       createTask: async (input) => {

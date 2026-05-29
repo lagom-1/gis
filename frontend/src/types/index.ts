@@ -83,3 +83,16 @@ export const PRICING_TIERS = {
 } as const
 
 export type PricingTier = keyof typeof PRICING_TIERS
+
+export interface SendCodeRequest {
+  email: string
+}
+
+export interface LoginWithCodeRequest {
+  email: string
+  code: string
+}
+
+export interface WechatAuthResponse {
+  auth_url: string
+}

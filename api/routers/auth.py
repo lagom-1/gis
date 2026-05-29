@@ -7,18 +7,23 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta
 from typing import Optional
 
+logger = logging.getLogger(__name__)
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from jose import JWTError, jwt
-from passlib.hash import bcrypt
+import bcrypt
 from sqlalchemy.orm import Session
 
 import config
 from api.database import get_db
 from api.models import (
+    LoginWithCodeRequest,
     MessageResponse,
+    SendCodeRequest,
     TokenResponse,
     User,
     UserLoginRequest,
@@ -32,13 +37,13 @@ router = APIRouter(prefix="/api/auth", tags=["认证"])
 
 def hash_password(password: str) -> str:
     """生成密码哈希（使用 bcrypt）"""
-    return bcrypt.hash(password)
+    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """验证密码"""
     try:
-        return bcrypt.verify(plain_password, hashed_password)
+        return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password.encode('utf-8'))
     except Exception:
         return False
 
@@ -66,12 +71,16 @@ async def _get_current_user(
     db: Session = Depends(get_db),
 ) -> User:
     """从 Authorization header 解析 JWT 并返回用户对象"""
-    token = credentials.credentials
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="无效的认证凭据",
         headers={"WWW-Authenticate": "Bearer"},
     )
+
+    if credentials is None:
+        raise credentials_exception
+
+    token = credentials.credentials
     try:
         payload = jwt.decode(token, config.SECRET_KEY, algorithms=[config.JWT_ALGORITHM])
         user_id_str: str = payload.get("sub")
@@ -92,6 +101,12 @@ async def get_current_user(
     db: Session = Depends(get_db),
 ) -> User:
     """可选认证：有 token 时解析，无 token 时返回默认用户（开发模式）"""
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="无效的认证凭据",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
     if credentials is None:
         user = db.query(User).filter(User.id == DEFAULT_USER_ID).first()
         if user is None:
@@ -118,9 +133,8 @@ async def get_current_user(
     except (JWTError, ValueError):
         pass
 
-    # token 无效时回退到默认用户
-    user = db.query(User).filter(User.id == DEFAULT_USER_ID).first()
-    return user or User(id=DEFAULT_USER_ID, username="default", email="default@opengis.local", password_hash="no-login", credits=99999)
+    # token 无效时抛出错误
+    raise credentials_exception
 
 
 # ── 端点 ──────────────────────────────────────────────────
@@ -180,3 +194,42 @@ async def login(request: UserLoginRequest, db: Session = Depends(get_db)):
 async def get_me(current_user: User = Depends(_get_current_user)):
     """获取当前已认证用户的信息"""
     return current_user
+
+
+from api.services.auth_service import generate_code, verify_code
+
+
+@router.post("/send-code", response_model=MessageResponse, summary="发送验证码")
+async def send_code(request: SendCodeRequest, db: Session = Depends(get_db)):
+    """发送邮箱验证码"""
+    user = db.query(User).filter(User.email == request.email).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="该邮箱未注册")
+
+    code = generate_code(request.email)
+    logger.info(f"验证码发送至 {request.email}: {code}")
+    return MessageResponse(success=True, message="验证码已发送")
+
+
+@router.post("/login-with-code", response_model=TokenResponse, summary="验证码登录")
+async def login_with_code(request: LoginWithCodeRequest, db: Session = Depends(get_db)):
+    """使用邮箱验证码登录"""
+    if not verify_code(request.email, request.code):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="验证码无效或已过期",
+        )
+
+    user = db.query(User).filter(User.email == request.email).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="该邮箱未注册")
+
+    access_token = create_access_token(
+        data={"sub": str(user.id), "username": user.username},
+        expires_delta=timedelta(minutes=config.JWT_EXPIRE_MINUTES),
+    )
+
+    return TokenResponse(
+        access_token=access_token,
+        expires_in=config.JWT_EXPIRE_MINUTES * 60,
+    )
