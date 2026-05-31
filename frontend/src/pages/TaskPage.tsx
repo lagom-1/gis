@@ -6,13 +6,16 @@ import { ArrowLeft, RefreshCw, XCircle } from 'lucide-react'
 import StatusBadge from '../components/StatusBadge'
 import OutputPreview from '../components/OutputPreview'
 import LoadingSpinner from '../components/LoadingSpinner'
-import { useTaskStore } from '../stores/taskStore'
+import { useAppStore } from '../stores/appStore'
 import toast from 'react-hot-toast'
 
 export default function TaskPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
-  const { currentTask, isLoading, fetchTask, cancelTask } = useTaskStore()
+  const currentTask = useAppStore(s => s.currentTask)
+  const isLoading = useAppStore(s => s.isLoadingTasks)
+  const fetchTask = useAppStore(s => s.fetchTask)
+  const cancelTask = useAppStore(s => s.cancelTask)
 
   useEffect(() => {
     if (id) {
@@ -23,7 +26,7 @@ export default function TaskPage() {
   // 离开任务详情页时清理 currentTask，防止泄漏到工作区
   useEffect(() => {
     return () => {
-      useTaskStore.setState({ currentTask: null })
+      useAppStore.setState({ currentTask: null })
     }
   }, [])
 

@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Type
+from typing import Any, Callable, Dict, List, Optional, Tuple, Type
 
 
 @dataclass
@@ -69,3 +69,30 @@ class BaseTool:
 
     def execute(self, **kwargs) -> Dict[str, Any]:
         raise NotImplementedError("子类必须实现 execute 方法")
+
+
+def ensure_gee_and_roi(runtime) -> Tuple[Any, Optional[Dict[str, Any]]]:
+    """GEE 工具公共前置检查：初始化 GEE + 解析研究区。
+
+    返回 (ee_geom, None) 成功，或 (None, error_dict) 失败。
+    所有 GEE 工具应统一使用此函数，避免重复逻辑。
+    """
+    from gis.gee.client import init_gee
+    init_result = init_gee()
+    if not init_result.get("success"):
+        return None, {
+            "success": False,
+            "message": f"GEE 未认证：{init_result.get('message', '')}。请先执行 gee_init 完成授权。",
+            "requires": "gee_init",
+        }
+    roi = runtime.last_region_geojson
+    if roi is None:
+        return None, {
+            "success": False,
+            "message": "缺少研究区。请先用 resolve_admin_region 解析行政区边界。",
+        }
+    try:
+        from gis.gee_tools import _normalize_region
+        return _normalize_region(region=roi), None
+    except Exception as e:
+        return None, {"success": False, "message": f"研究区转换失败: {e}"}

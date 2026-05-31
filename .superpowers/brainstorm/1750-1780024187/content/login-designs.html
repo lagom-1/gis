@@ -1,0 +1,128 @@
+<h2>登录页面设计方案</h2>
+<p class="subtitle">基于企业级风格 + 左右分栏布局，提出 3 种设计方案</p>
+
+<div class="cards">
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="display: flex; height: 300px; background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%); border-radius: 8px; overflow: hidden;">
+        <div style="flex: 1; padding: 40px; display: flex; flex-direction: column; justify-content: center; background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); color: white;">
+          <div style="font-size: 24px; font-weight: bold; margin-bottom: 20px;">OpenGIS</div>
+          <div style="font-size: 14px; opacity: 0.8; line-height: 1.6;">AI 驱动的遥感分析平台<br>智能解译 · 精准制图 · 时空洞察</div>
+          <div style="margin-top: 30px; display: flex; gap: 12px;">
+            <div style="width: 48px; height: 48px; background: rgba(255,255,255,0.1); border-radius: 8px; display: flex; align-items: center; justify-content: center;">🛰️</div>
+            <div style="width: 48px; height: 48px; background: rgba(255,255,255,0.1); border-radius: 8px; display: flex; align-items: center; justify-content: center;">🤖</div>
+            <div style="width: 48px; height: 48px; background: rgba(255,255,255,0.1); border-radius: 8px; display: flex; align-items: center; justify-content: center;">📊</div>
+          </div>
+        </div>
+        <div style="flex: 1; padding: 40px; display: flex; flex-direction: column; justify-content: center;">
+          <div style="font-size: 20px; font-weight: 600; color: #1e293b; margin-bottom: 8px;">登录账号</div>
+          <div style="font-size: 14px; color: #64748b; margin-bottom: 24px;">欢迎回来，请输入您的凭据</div>
+          <div style="background: #f1f5f9; border-radius: 8px; padding: 12px; margin-bottom: 12px; font-size: 13px; color: #94a3b8;">邮箱地址</div>
+          <div style="background: #f1f5f9; border-radius: 8px; padding: 12px; margin-bottom: 20px; font-size: 13px; color: #94a3b8;">密码</div>
+          <div style="background: #2563eb; color: white; border-radius: 8px; padding: 12px; text-align: center; font-size: 14px; font-weight: 500;">登录</div>
+          <div style="text-align: center; margin-top: 16px; font-size: 12px; color: #94a3b8;">或使用其他方式登录</div>
+          <div style="display: flex; gap: 12px; justify-content: center; margin-top: 12px;">
+            <div style="width: 40px; height: 40px; border: 1px solid #e2e8f0; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 18px;">微</div>
+            <div style="width: 40px; height: 40px; border: 1px solid #e2e8f0; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 18px;">G</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A. 专业深色</h3>
+      <p>左侧深色背景展示品牌，右侧白色登录表单，对比鲜明，专业感强</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="display: flex; height: 300px; background: #f8fafc; border-radius: 8px; overflow: hidden;">
+        <div style="flex: 1; padding: 40px; display: flex; flex-direction: column; justify-content: center; background: linear-gradient(135deg, #059669 0%, #10b981 100%); color: white;">
+          <div style="font-size: 24px; font-weight: bold; margin-bottom: 20px;">OpenGIS</div>
+          <div style="font-size: 14px; opacity: 0.9; line-height: 1.6; margin-bottom: 24px;">从卫星影像到决策洞察<br>只需一句自然语言</div>
+          <div style="display: flex; flex-direction: column; gap: 12px;">
+            <div style="display: flex; align-items: center; gap: 10px; font-size: 13px;">
+              <div style="width: 24px; height: 24px; background: rgba(255,255,255,0.2); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px;">✓</div>
+              智能温度反演与热岛分析
+            </div>
+            <div style="display: flex; align-items: center; gap: 10px; font-size: 13px;">
+              <div style="width: 24px; height: 24px; background: rgba(255,255,255,0.2); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px;">✓</div>
+              多时相变化检测
+            </div>
+            <div style="display: flex; align-items: center; gap: 10px; font-size: 13px;">
+              <div style="width: 24px; height: 24px; background: rgba(255,255,255,0.2); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px;">✓</div>
+              自然语言交互式分析
+            </div>
+          </div>
+        </div>
+        <div style="flex: 1; padding: 40px; display: flex; flex-direction: column; justify-content: center;">
+          <div style="display: flex; gap: 8px; margin-bottom: 24px;">
+            <div style="padding: 8px 16px; background: white; border-radius: 6px; font-size: 13px; font-weight: 500; color: #059669; border: 1px solid #059669;">密码登录</div>
+            <div style="padding: 8px 16px; background: #f1f5f9; border-radius: 6px; font-size: 13px; color: #64748b;">验证码登录</div>
+          </div>
+          <div style="background: #f1f5f9; border-radius: 8px; padding: 12px; margin-bottom: 12px; font-size: 13px; color: #94a3b8;">邮箱地址</div>
+          <div style="background: #f1f5f9; border-radius: 8px; padding: 12px; margin-bottom: 20px; font-size: 13px; color: #94a3b8;">密码</div>
+          <div style="background: #059669; color: white; border-radius: 8px; padding: 12px; text-align: center; font-size: 14px; font-weight: 500;">登录</div>
+          <div style="text-align: center; margin-top: 16px; font-size: 12px; color: #94a3b8;">
+            <span style="cursor: pointer; color: #059669;">忘记密码？</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B. 生态绿色</h3>
+      <p>左侧绿色渐变展示 GIS 特色功能，右侧提供密码/验证码切换登录</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="display: flex; height: 300px; background: #f8fafc; border-radius: 8px; overflow: hidden;">
+        <div style="flex: 1; padding: 40px; display: flex; flex-direction: column; justify-content: center; background: linear-gradient(135deg, #1e3a5f 0%, #2d5a87 100%); color: white; position: relative; overflow: hidden;">
+          <div style="position: absolute; top: 0; right: 0; width: 200px; height: 200px; background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 70%); border-radius: 50%; transform: translate(30%, -30%);"></div>
+          <div style="font-size: 24px; font-weight: bold; margin-bottom: 20px; position: relative;">OpenGIS</div>
+          <div style="font-size: 14px; opacity: 0.8; line-height: 1.6; margin-bottom: 30px; position: relative;">专业级遥感影像分析平台<br>为企业与科研提供 AI 地理洞察</div>
+          <div style="display: flex; gap: 24px; position: relative;">
+            <div style="text-align: center;">
+              <div style="font-size: 24px; font-weight: bold;">10K+</div>
+              <div style="font-size: 11px; opacity: 0.7; margin-top: 4px;">活跃用户</div>
+            </div>
+            <div style="text-align: center;">
+              <div style="font-size: 24px; font-weight: bold;">50+</div>
+              <div style="font-size: 11px; opacity: 0.7; margin-top: 4px;">分析工具</div>
+            </div>
+            <div style="text-align: center;">
+              <div style="font-size: 24px; font-weight: bold;">99%</div>
+              <div style="font-size: 11px; opacity: 0.7; margin-top: 4px;">准确率</div>
+            </div>
+          </div>
+        </div>
+        <div style="flex: 1; padding: 40px; display: flex; flex-direction: column; justify-content: center;">
+          <div style="font-size: 20px; font-weight: 600; color: #1e293b; margin-bottom: 4px;">欢迎回来</div>
+          <div style="font-size: 14px; color: #64748b; margin-bottom: 24px;">登录以继续使用 OpenGIS</div>
+          <div style="display: flex; flex-direction: column; gap: 12px; margin-bottom: 20px;">
+            <div style="display: flex; align-items: center; gap: 10px; padding: 10px 16px; border: 1px solid #e2e8f0; border-radius: 8px; cursor: pointer;">
+              <span style="font-size: 18px;">📧</span>
+              <span style="font-size: 13px; color: #64748b;">使用邮箱登录</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 10px; padding: 10px 16px; border: 1px solid #e2e8f0; border-radius: 8px; cursor: pointer;">
+              <span style="font-size: 18px;">💬</span>
+              <span style="font-size: 13px; color: #64748b;">使用微信登录</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 10px; padding: 10px 16px; border: 1px solid #e2e8f0; border-radius: 8px; cursor: pointer;">
+              <span style="font-size: 18px;">💬</span>
+              <span style="font-size: 13px; color: #64748b;">使用微信登录</span>
+            </div>
+          </div>
+          <div style="text-align: center; font-size: 12px; color: #94a3b8;">
+            还没有账号？<span style="color: #2d5a87; cursor: pointer;">立即注册</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>C. 数据驱动</h3>
+      <p>左侧展示平台数据统计，右侧提供多种登录方式选择，突出企业实力</p>
+    </div>
+  </div>
+</div>

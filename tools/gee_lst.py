@@ -14,7 +14,9 @@ import config as app_config
 from tools.base import BaseTool, tool
 
 
-def _out_dir() -> Path:
+def _out_dir(runtime=None) -> Path:
+    if runtime:
+        return runtime.session_dir
     d = Path(app_config.OUTPUTS_DIR)
     d.mkdir(parents=True, exist_ok=True)
     return d
@@ -108,6 +110,8 @@ class _GeeLSTBase(BaseTool):
         "end_date": "结束日期 YYYY-MM-DD，缺省时默认上一个完整自然月",
         "cloud_pct": "最大云量百分比 0-100，默认 30",
         "scale": "分辨率(米)，默认 30",
+        "region": "可选，AOI 边界（GeoJSON dict 或 bbox [xmin,ymin,xmax,ymax]），缺省使用已解析的行政区",
+        "region_path": "可选，本地 GeoJSON 文件路径",
     },
     category="data",
 )
@@ -132,7 +136,7 @@ class GeeComputeLSTTool(_GeeLSTBase):
             region_name=region_name, start_date=start_date,
             end_date=end_date, product="LST"
         )
-        output_tif = str(_out_dir() / filename)
+        output_tif = str(_out_dir(self.runtime) / filename)
 
         result = gee_compute_lst(
             start_date=start_date,
@@ -161,6 +165,7 @@ class GeeComputeLSTTool(_GeeLSTBase):
         "cloud_pct": "最大云量百分比，默认30",
         "reducer": "median/mean/mosaic/first，默认 median",
         "mask_clouds": "是否在 GEE 端像素级去云，默认 true",
+        "output_tif": "可选，指定输出 TIF 文件路径",
     },
     category="data",
 )
@@ -190,7 +195,7 @@ class GeeDownloadLandsatSCATool(_GeeLSTBase):
             region_name=region_name, start_date=start_date,
             end_date=end_date, product="Landsat_SCA"
         )
-        output_tif = output_tif or str(_out_dir() / filename)
+        output_tif = output_tif or str(_out_dir(self.runtime) / filename)
 
         result = gee_download_landsat_sca(
             start_date=start_date,
@@ -218,6 +223,8 @@ class GeeDownloadLandsatSCATool(_GeeLSTBase):
         "start_date": "开始日期 YYYY-MM-DD，缺省时默认上一个完整自然月",
         "end_date": "结束日期 YYYY-MM-DD，缺省时默认上一个完整自然月",
         "scale": "导出分辨率，默认30",
+        "region": "可选，AOI 边界，缺省使用已解析的行政区",
+        "region_path": "可选，本地 GeoJSON 文件路径",
     },
     category="data",
 )
@@ -246,7 +253,7 @@ class GeeDownloadMonthlyLSTTool(_GeeLSTBase):
             region_name=region_name, start_date=start_date,
             end_date=end_date, product="LST"
         )
-        output_tif = str(_out_dir() / filename)
+        output_tif = str(_out_dir(self.runtime) / filename)
 
         result = gee_download_monthly_lst(
             start_date=start_date,
@@ -272,6 +279,8 @@ class GeeDownloadMonthlyLSTTool(_GeeLSTBase):
         "months": "可选，要下载的月份列表，如 [1,2,3,4,5,6]。不传则默认全部 12 个月",
         "output_dir": "输出目录，存放各月的 TIF 文件",
         "scale": "导出分辨率，默认30",
+        "region": "可选，AOI 边界，缺省使用已解析的行政区",
+        "region_path": "可选，本地 GeoJSON 文件路径",
     },
     category="data",
 )
@@ -293,7 +302,7 @@ class GeeDownloadYearlyLSTTool(_GeeLSTBase):
         dir_name = build_task_filename(
             region_name=region_name, year=int(year), product="全年LST", suffix=""
         )
-        output_dir = output_dir or str(_out_dir() / dir_name)
+        output_dir = output_dir or str(_out_dir(self.runtime) / dir_name)
 
         result = gee_download_yearly_lst(
             year=int(year),
@@ -338,6 +347,8 @@ class GeeDownloadYearlyLSTTool(_GeeLSTBase):
         "month": "月份 1-12，如 8 表示每年8月",
         "output_dir": "输出目录，存放各年的 TIF 文件",
         "scale": "导出分辨率，默认30",
+        "region": "可选，AOI 边界，缺省使用已解析的行政区",
+        "region_path": "可选，本地 GeoJSON 文件路径",
     },
     category="data",
 )
@@ -360,7 +371,7 @@ class GeeDownloadMultiYearLSTTool(_GeeLSTBase):
             region_name=region_name, start_year=int(start_year),
             end_year=int(end_year), month=int(month), product="LST", suffix=""
         )
-        output_dir = output_dir or str(_out_dir() / dir_name)
+        output_dir = output_dir or str(_out_dir(self.runtime) / dir_name)
 
         result = gee_download_multi_year_lst(
             start_year=int(start_year),

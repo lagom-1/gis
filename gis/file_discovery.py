@@ -147,7 +147,9 @@ def find_local_files(
             if root_path in {outputs_dir, str(WORKSPACE_DIR)}:
                 continue  # 已搜索过
             # 跳过整个盘符根目录（太慢）
-            if root_path in {"C:\\", "D:\\", "E:\\", "G:\\"}:
+            if len(root_path) <= 3 and root_path.endswith(":\\"):
+                continue
+            if root_path == "/":
                 continue
             _scan_dir(root_path, depth=0, max_depth=4)
             if len(results) >= max_results:

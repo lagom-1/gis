@@ -82,13 +82,20 @@ def _try_parse_json(text: str) -> Optional[Dict[str, Any]]:
         except json.JSONDecodeError:
             pass
 
-    # 3. 提取第一个 { ... } 块（贪心匹配最外层）
-    m = re.search(r'\{.*\}', text, re.DOTALL)
-    if m:
-        try:
-            return json.loads(m.group(0))
-        except json.JSONDecodeError:
-            pass
+    # 3. 提取第一个平衡的 { ... } 块
+    start = text.find('{')
+    if start >= 0:
+        depth = 0
+        for i in range(start, len(text)):
+            if text[i] == '{':
+                depth += 1
+            elif text[i] == '}':
+                depth -= 1
+            if depth == 0:
+                try:
+                    return json.loads(text[start:i+1])
+                except json.JSONDecodeError:
+                    break
 
     # 4. 修复常见问题：截断的 JSON → 尝试补括号
     for closer in ['}', '}]', '}}', '"]}}', '"}}']:
@@ -141,17 +148,6 @@ class LLMClient:
 
         input_str = json.dumps(payload, ensure_ascii=False)
 
-        # ── 上下文倾倒：第一次调用时保存完整 prompt ──
-        step = payload.get("step", 0)
-        if step == 1:
-            try:
-                dump = {"system": system_prompt, "payload": payload}
-                with open("debug_raw_prompt.json", "w", encoding="utf-8") as f:
-                    json.dump(dump, f, ensure_ascii=False, indent=2)
-                print(f"\n{'='*60}\n[Prompt Dump] 已将大模型开局上下文全量导出至 debug_raw_prompt.json\n{'='*60}\n")
-            except Exception:
-                pass
-
         # 最多尝试 2 次 + 1 次驳回重试，指数退避：1s
         last_text = None
         rejection_used = False
@@ -186,12 +182,18 @@ class LLMClient:
             if attempt < 2:
                 time.sleep(1)
 
-        # 不降级为 final——而是抛出 RuntimeError 让引擎重试
+        # JSON 解析失败 → 判断是对话还是任务
         if last_text:
-            msg = f"LLM 返回了无法解析的响应: {last_text[:200]}"
-        else:
-            msg = "LLM 未返回任何响应，请检查 API Key 和网络连接。"
-        print(f"[LLM] JSON 解析全部失败: {msg}")
+            # 如果已有工具调用历史（output_count > 0），说明是任务中断，抛出错误让引擎重试
+            if payload.get("output_count", 0) > 0 or payload.get("last_result") is not None:
+                msg = f"LLM 在任务执行中返回了非 JSON 响应: {last_text[:150]}"
+                print(f"[LLM] {msg}")
+                raise RuntimeError(msg)
+            # 否则是对话场景，转为 final
+            print(f"[LLM] JSON 解析失败（对话场景），转为 final")
+            return {"type": "final", "answer": last_text}
+        msg = "LLM 未返回任何响应，请检查 API Key 和网络连接。"
+        print(f"[LLM] {msg}")
         raise RuntimeError(msg)
 
     def invoke_text(self, system_prompt: str, user_msg: str) -> str:

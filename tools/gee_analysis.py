@@ -8,32 +8,15 @@ from pathlib import Path
 from typing import Any, Dict
 
 import config as app_config
-from tools.base import BaseTool, tool
+from tools.base import BaseTool, ensure_gee_and_roi, tool
 
 
-def _out_dir() -> Path:
+def _out_dir(runtime=None) -> Path:
+    if runtime:
+        return runtime.session_dir
     d = Path(app_config.OUTPUTS_DIR)
     d.mkdir(parents=True, exist_ok=True)
     return d
-
-
-def _ensure_gee(runtime) -> Dict[str, Any] | None:
-    from gis.gee.client import init_gee
-    r = init_gee()
-    if not r.get("success"):
-        return {"success": False, "message": f"GEE 未认证: {r.get('message', '')}", "requires": "gee_init"}
-    return None
-
-
-def _resolve_roi(runtime, args: Dict[str, Any]) -> tuple:
-    roi = args.get("region") or runtime.last_region_geojson
-    if roi is None:
-        return None, {"success": False, "message": "缺少研究区。请先用 resolve_admin_region 解析。"}
-    try:
-        from gis.gee_tools import _normalize_region
-        return _normalize_region(region=roi), None
-    except Exception as e:
-        return None, {"success": False, "message": f"研究区转换失败: {e}"}
 
 
 @tool(
@@ -48,6 +31,8 @@ def _resolve_roi(runtime, args: Dict[str, Any]) -> tuple:
         "end_date": "结束日期 YYYY-MM-DD",
         "scale": "采样分辨率（米），默认 1000",
         "title": "图表标题",
+        "reducer": "像素聚合方式 mean/first/median，默认 mean",
+        "point_buffer_m": "点位缓冲区半径（米），0 表示单点采样",
     },
     category="analysis",
 )
@@ -55,13 +40,13 @@ class ExtractTimeseriesTool(BaseTool):
     def execute(self, lat, lon, image_collection_id="ECMWF/ERA5_LAND/DAILY_AGGR",
                 band_names=None, start_date="2020-01-01", end_date="2020-12-31",
                 scale=1000, title="", reducer="mean", point_buffer_m=0) -> Dict[str, Any]:
-        err = _ensure_gee(self.runtime)
+        _, err = ensure_gee_and_roi(self.runtime)
         if err:
             return err
         from gis.timeseries_extract import extract_timeseries_to_point
         name = self.runtime.last_region_name or f"{lat}_{lon}"
-        csv_path = str(_out_dir() / f"timeseries_{name}.csv")
-        png_path = str(_out_dir() / f"timeseries_{name}.png")
+        csv_path = str(_out_dir(self.runtime) / f"timeseries_{name}.csv")
+        png_path = str(_out_dir(self.runtime) / f"timeseries_{name}.png")
         result = extract_timeseries_to_point(
             lat=float(lat), lon=float(lon),
             image_collection_id=image_collection_id,
@@ -71,7 +56,7 @@ class ExtractTimeseriesTool(BaseTool):
             title=title, reducer=reducer, point_buffer_m=int(point_buffer_m),
         )
         if result.get("success"):
-            self.runtime.last_output = result.get("png_path")
+            self.runtime.last_output = result.get("output_png")
         return result
 
 
@@ -88,15 +73,12 @@ class ExtractTimeseriesTool(BaseTool):
 class DynamicWorldTool(BaseTool):
     def execute(self, start_date="2021-01-01", end_date="2022-01-01",
                 return_type="class", scale=10, title="") -> Dict[str, Any]:
-        err = _ensure_gee(self.runtime)
+        ee_geom, err = ensure_gee_and_roi(self.runtime)
         if err:
             return err
-        ee_geom, err2 = _resolve_roi(self.runtime, {})
-        if err2:
-            return err2
         name = self.runtime.last_region_name or "dw"
-        tif_path = str(_out_dir() / f"{name}_dynamic_world.tif")
-        png_path = str(_out_dir() / f"{name}_dynamic_world.png")
+        tif_path = str(_out_dir(self.runtime) / f"{name}_dynamic_world.tif")
+        png_path = str(_out_dir(self.runtime) / f"{name}_dynamic_world.png")
         try:
             from gis.dynamic_world import dynamic_world_landcover
             result = dynamic_world_landcover(
@@ -123,22 +105,20 @@ class DynamicWorldTool(BaseTool):
         "n_clusters": "聚类数，默认 5", "scale": "分辨率，默认 30",
         "start_date": "日期范围起始", "end_date": "日期范围结束",
         "band_names": "分类波段列表", "title": "专题图标题",
+        "num_pixels": "采样像素数，默认 5000",
     },
     category="analysis",
 )
 class UnsupervisedClassifyTool(BaseTool):
     def execute(self, n_clusters=5, scale=30, start_date=None, end_date=None,
                 band_names=None, title="", num_pixels=5000) -> Dict[str, Any]:
-        err = _ensure_gee(self.runtime)
+        ee_geom, err = ensure_gee_and_roi(self.runtime)
         if err:
             return err
-        ee_geom, err2 = _resolve_roi(self.runtime, {})
-        if err2:
-            return err2
         from gis.ee_classification import ee_unsupervised_classify
         name = self.runtime.last_region_name or "classify"
-        tif_path = str(_out_dir() / f"{name}_unsupervised.tif")
-        png_path = str(_out_dir() / f"{name}_unsupervised.png")
+        tif_path = str(_out_dir(self.runtime) / f"{name}_unsupervised.tif")
+        png_path = str(_out_dir(self.runtime) / f"{name}_unsupervised.png")
         result = ee_unsupervised_classify(
             region=ee_geom, n_clusters=int(n_clusters), scale=int(scale),
             start_date=start_date, end_date=end_date,
@@ -158,6 +138,9 @@ class UnsupervisedClassifyTool(BaseTool):
         "image_collection_id": "GEE ImageCollection ID",
         "start_date": "起始日期", "end_date": "结束日期",
         "band_names": "波段名列表", "opacity": "透明度，默认 0.8",
+        "time_interval": "时间间隔（天），默认 1",
+        "center_lat": "地图中心纬度", "center_lon": "地图中心经度",
+        "zoom": "初始缩放级别，默认 8",
     },
     category="visualization",
 )
@@ -166,15 +149,12 @@ class TimeSliderTool(BaseTool):
                 start_date="2018-12-22", end_date="2018-12-23",
                 band_names=None, opacity=0.8, time_interval=1,
                 center_lat=None, center_lon=None, zoom=8) -> Dict[str, Any]:
-        err = _ensure_gee(self.runtime)
+        ee_geom, err = ensure_gee_and_roi(self.runtime)
         if err:
             return err
-        ee_geom, err2 = _resolve_roi(self.runtime, {})
-        if err2:
-            return err2
         from gis.time_slider import generate_time_slider_map
         name = self.runtime.last_region_name or "timeslider"
-        output_path = str(_out_dir() / f"{name}_time_slider.html")
+        output_path = str(_out_dir(self.runtime) / f"{name}_time_slider.html")
         result = generate_time_slider_map(
             image_collection_id=image_collection_id,
             region=ee_geom, start_date=start_date, end_date=end_date,
@@ -200,24 +180,16 @@ class TimeSliderTool(BaseTool):
 class ZonalStatsTool(BaseTool):
     def execute(self, image_id=None, stat_type="MEAN", scale=1000) -> Dict[str, Any]:
         import ee
-        err = _ensure_gee(self.runtime)
+        ee_geom, err = ensure_gee_and_roi(self.runtime)
         if err:
             return err
         image_input = image_id or self.runtime.current_tif()
         if not image_input:
             return {"success": False, "message": "缺少影像参数（image_id 或 tif_path）"}
-        roi = self.runtime.last_region_geojson
-        if roi is None:
-            return {"success": False, "message": "缺少研究区"}
-        from gis.gee_tools import _normalize_region
         from gis.zonal_stats import gee_zonal_statistics
-        try:
-            ee_geom = _normalize_region(region=roi)
-            ee_fc = ee.FeatureCollection([ee.Feature(ee_geom)])
-        except Exception as e:
-            return {"success": False, "message": f"区域转换失败: {e}"}
+        ee_fc = ee.FeatureCollection([ee.Feature(ee_geom)])
         name = self.runtime.last_region_name or "zonal"
-        csv_path = str(_out_dir() / f"{name}_zonal_stats.csv")
+        csv_path = str(_out_dir(self.runtime) / f"{name}_zonal_stats.csv")
         result = gee_zonal_statistics(
             image=image_input, regions=ee_fc, output_csv=csv_path,
             stat_type=stat_type, scale=int(scale),

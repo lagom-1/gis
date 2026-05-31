@@ -26,27 +26,24 @@ def export_image(
             base = os.path.splitext(input_path)[0]
             output_path = f"{base}_export.{format}"
 
-        img = Image.open(input_path)
-
-        if format in ("jpg", "jpeg"):
-            # JPG 不支持透明度
-            if img.mode in ("RGBA", "P"):
-                img = img.convert("RGB")
-            img.save(output_path, "JPEG", quality=95, dpi=(dpi, dpi))
-        elif format == "png":
-            img.save(output_path, "PNG", dpi=(dpi, dpi))
-        elif format == "pdf":
-            img.save(output_path, "PDF", resolution=dpi)
-        elif format == "tif" or format == "tiff":
-            img.save(output_path, "TIFF", dpi=(dpi, dpi))
-        elif format == "svg":
-            # SVG 需要从 matplotlib 生成，这里提示用户
-            return {
-                "success": False,
-                "message": "SVG 格式需要在出图时指定，请使用 matplotlib 的 savefig(svg) 功能",
-            }
-        else:
-            return {"success": False, "message": f"不支持的格式: {format}"}
+        with Image.open(input_path) as img:
+            if format in ("jpg", "jpeg"):
+                if img.mode in ("RGBA", "P"):
+                    img = img.convert("RGB")
+                img.save(output_path, "JPEG", quality=95, dpi=(dpi, dpi))
+            elif format == "png":
+                img.save(output_path, "PNG", dpi=(dpi, dpi))
+            elif format == "pdf":
+                img.save(output_path, "PDF", resolution=dpi)
+            elif format == "tif" or format == "tiff":
+                img.save(output_path, "TIFF", dpi=(dpi, dpi))
+            elif format == "svg":
+                return {
+                    "success": False,
+                    "message": "SVG 格式需要在出图时指定，请使用 matplotlib 的 savefig(svg) 功能",
+                }
+            else:
+                return {"success": False, "message": f"不支持的格式: {format}"}
 
         return {
             "success": True,

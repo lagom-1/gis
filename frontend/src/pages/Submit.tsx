@@ -1,11 +1,12 @@
 import { useNavigate } from 'react-router-dom'
 import TaskInput from '../components/TaskInput'
-import { useTaskStore } from '../stores/taskStore'
+import { useAppStore } from '../stores/appStore'
 import toast from 'react-hot-toast'
 
 export default function Submit() {
   const navigate = useNavigate()
-  const { createTask, isLoading } = useTaskStore()
+  const createTask = useAppStore(s => s.createTask)
+  const isLoading = useAppStore(s => s.isLoadingTasks)
 
   const handleSubmit = async (text: string) => {
     try {

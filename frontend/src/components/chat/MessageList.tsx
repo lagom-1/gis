@@ -1,8 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { Loader2, AlertCircle } from 'lucide-react'
 import { MessageBubble } from './MessageBubble'
-import { ToolCallCard } from './ToolCallCard'
-import { getStepDescription } from '../../services/toolNames'
 import type { Message, ToolCall, ExecutionPhase } from '../../types/conversation'
 
 interface Props {
@@ -10,14 +8,10 @@ interface Props {
   toolCalls: ToolCall[]
   phase: ExecutionPhase
   answer: string
-  step?: number
-  maxSteps?: number
-  currentTool?: string
-  reason?: string
   hideTools?: boolean
 }
 
-export function MessageList({ messages, toolCalls, phase, answer, step, maxSteps, currentTool, reason, hideTools }: Props) {
+export function MessageList({ messages, toolCalls, phase, answer, hideTools }: Props) {
   const endRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -26,40 +20,17 @@ export function MessageList({ messages, toolCalls, phase, answer, step, maxSteps
 
   const isStreaming = phase === 'thinking' || phase === 'executing'
 
-  // SSE 流活跃时，用实时工具名称去重持久化消息避免重复显示
-  // 流结束后（done/idle），持久化消息是权威数据源，实时 toolCalls 可能因事件丢失而 stale
-  const liveToolNames = isStreaming ? new Set(toolCalls.map(tc => tc.tool)) : new Set<string>()
-
   return (
     <div className="space-y-1">
       {messages.map((msg) => {
         if (msg.role === 'tool_call' || msg.role === 'tool_result') {
-          // 任务完成后隐藏工具步骤消息，保持页面简洁
-          if (hideTools) return null
-          // 如果 SSE 实时流中已有同名工具调用，跳过 API 持久化消息（避免重复显示）
-          const msgToolName = msg.tool_name || ''
-          if (msgToolName && liveToolNames.has(msgToolName)) {
-            return null
-          }
-          const result = msg.tool_result as Record<string, unknown> | undefined
-          const call: ToolCall = {
-            tool: msg.tool_name || 'unknown',
-            args: (msg.tool_args as Record<string, unknown>) || {},
-            result: result || undefined,
-            status: msg.role === 'tool_result'
-              ? (result && result.success === false ? 'error' : 'success')
-              : 'success',
-          }
-          return <ToolCallCard key={`${msg.id}-${msg.role}`} call={call} />
+          // 工具步骤消息永远不渲染，只显示 assistant 最终总结
+          return null
         }
         return (
           <MessageBubble key={`${msg.id}-${msg.role}`} role={msg.role} content={msg.content} timestamp={msg.created_at} hideTools={hideTools} />
         )
       })}
-
-      {!hideTools && isStreaming && toolCalls.map((tc, i) => (
-        <ToolCallCard key={`live-${tc.tool}-${i}`} call={tc} />
-      ))}
 
       {isStreaming && (
         <div className="flex justify-start">
@@ -67,9 +38,7 @@ export function MessageList({ messages, toolCalls, phase, answer, step, maxSteps
             <div className="flex items-center gap-2">
               <Loader2 className="h-4 w-4 animate-spin text-amber-500" />
               <span className="text-sm text-amber-700 font-medium">
-                {phase === 'thinking'
-                  ? '正在分析任务...'
-                  : getStepDescription(step || 0, maxSteps || 0, currentTool, reason)}
+                {phase === 'thinking' ? '正在分析任务...' : '正在执行中...'}
               </span>
             </div>
           </div>

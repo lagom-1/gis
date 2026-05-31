@@ -54,7 +54,7 @@ def extract_timeseries_to_point(
         point_buffer_m: 点位缓冲区半径（米），0 表示单点采样
 
     Returns:
-        {"success": bool, "message": str, "csv_path": str, "png_path": str, ...}
+        {"success": bool, "message": str, "output_csv": str, "output_png": str, ...}
     """
     try:
         # ── 步骤 1：初始化 GEE ──
@@ -214,8 +214,6 @@ def extract_timeseries_to_point(
                 f"时间范围 {df['date'].min().strftime('%Y-%m-%d')} ~ "
                 f"{df['date'].max().strftime('%Y-%m-%d')}"
             ),
-            "csv_path": output_csv,
-            "png_path": output_png,
             "output_csv": output_csv,
             "output_png": output_png,
             "lat": lat,

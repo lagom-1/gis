@@ -44,6 +44,10 @@ class SetMapStyleTool(BaseTool):
 class UpdatePreferencesTool(BaseTool):
     def execute(self, **kwargs) -> Dict[str, Any]:
         updated = {k: v for k, v in kwargs.items() if v is not None}
+        self.runtime.preferences.update(updated)
+        # 如果包含配色，同步更新 map_style
+        if "colormap" in updated:
+            self.runtime.map_style["colormap"] = updated["colormap"]
         return {"success": True, "message": "偏好已更新", "updated_preferences": updated}
 
 

@@ -11,7 +11,9 @@ import config as app_config
 from tools.base import BaseTool, tool
 
 
-def _out_dir() -> Path:
+def _out_dir(runtime=None) -> Path:
+    if runtime:
+        return runtime.session_dir
     d = Path(app_config.OUTPUTS_DIR)
     d.mkdir(parents=True, exist_ok=True)
     return d
@@ -34,7 +36,7 @@ class ExportResultTool(BaseTool):
             return {"success": False, "message": "没有可导出的结果图"}
         from gis.export import export_image
         stem = Path(input_path).stem
-        output_path = str(_out_dir() / f"{stem}_export.{format}")
+        output_path = str(_out_dir(self.runtime) / f"{stem}_export.{format}")
         result = export_image(
             input_path=input_path, output_path=output_path,
             format=format, dpi=int(dpi),
@@ -53,6 +55,7 @@ class ExportResultTool(BaseTool):
         "conclusion": "总结文字",
         "format": "html或pdf",
         "images": "可选，指定要包含的图片路径列表",
+        "report_items": "可选，报告项列表 [{section_title, image_path, image_caption, stats}]",
     },
     category="export",
 )
@@ -115,7 +118,7 @@ class GenerateReportTool(BaseTool):
         if not items:
             return {"success": False, "message": "没有可用的分析结果来生成报告。"}
 
-        output_path = str(_out_dir() / f"{dataset_name}_experiment_report.html")
+        output_path = str(_out_dir(self.runtime) / f"{dataset_name}_experiment_report.html")
         result = generate_html_report(
             report_items=items, output_path=output_path,
             title=title, subtitle=subtitle,

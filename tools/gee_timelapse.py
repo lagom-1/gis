@@ -8,32 +8,15 @@ from pathlib import Path
 from typing import Any, Dict
 
 import config as app_config
-from tools.base import BaseTool, tool
+from tools.base import BaseTool, ensure_gee_and_roi, tool
 
 
-def _out_dir() -> Path:
+def _out_dir(runtime=None) -> Path:
+    if runtime:
+        return runtime.session_dir
     d = Path(app_config.OUTPUTS_DIR)
     d.mkdir(parents=True, exist_ok=True)
     return d
-
-
-def _ensure_gee_and_roi(runtime) -> tuple:
-    from gis.gee.client import init_gee
-    init_result = init_gee()
-    if not init_result.get("success"):
-        return None, {
-            "success": False,
-            "message": f"GEE 未认证：{init_result.get('message', '')}。请先执行 gee_init 完成授权。",
-            "requires": "gee_init",
-        }
-    roi = runtime.last_region_geojson
-    if roi is None:
-        return None, {"success": False, "message": "缺少研究区。请先用 resolve_admin_region 解析行政区边界。"}
-    try:
-        from gis.gee_tools import _normalize_region
-        return _normalize_region(region=roi), None
-    except Exception as e:
-        return None, {"success": False, "message": f"研究区转换失败: {e}"}
 
 
 @tool(
@@ -55,12 +38,12 @@ def _ensure_gee_and_roi(runtime) -> tuple:
 class GeeLSTTimelapseTool(BaseTool):
     def execute(self, start_year=2015, end_year=2024, month=7, cloud_pct=30,
                 title="", fps=2, dimensions=600, vmin=20, vmax=45) -> Dict[str, Any]:
-        ee_geom, err = _ensure_gee_and_roi(self.runtime)
+        ee_geom, err = ensure_gee_and_roi(self.runtime)
         if err:
             return err
 
         from gis.gee_timelapse import generate_lst_timelapse, parse_month
-        gif_dir = str(_out_dir() / "timelapse")
+        gif_dir = str(_out_dir(self.runtime) / "timelapse")
         os.makedirs(gif_dir, exist_ok=True)
 
         result = generate_lst_timelapse(
@@ -92,13 +75,13 @@ class GeeLSTTimelapseTool(BaseTool):
 class GeeLSTSplitPanelTool(BaseTool):
     def execute(self, year_a=2015, year_b=2024, month=7, cloud_pct=30,
                 vmin=20, vmax=45) -> Dict[str, Any]:
-        ee_geom, err = _ensure_gee_and_roi(self.runtime)
+        ee_geom, err = ensure_gee_and_roi(self.runtime)
         if err:
             return err
 
         from gis.gee_timelapse import generate_lst_split_panel, parse_month
         name = self.runtime.last_region_name or "region"
-        output_path = str(_out_dir() / f"{name}_split_{year_a}_vs_{year_b}_m{month}.html")
+        output_path = str(_out_dir(self.runtime) / f"{name}_split_{year_a}_vs_{year_b}_m{month}.html")
 
         result = generate_lst_split_panel(
             roi=ee_geom, output_path=output_path,
@@ -127,14 +110,14 @@ class GeeLSTSplitPanelTool(BaseTool):
 class GeeLSTTrendChartTool(BaseTool):
     def execute(self, start_year=2015, end_year=2024, month=7, cloud_pct=30,
                 title="") -> Dict[str, Any]:
-        ee_geom, err = _ensure_gee_and_roi(self.runtime)
+        ee_geom, err = ensure_gee_and_roi(self.runtime)
         if err:
             return err
 
         from gis.gee_timelapse import generate_lst_trend_chart, parse_month
         name = self.runtime.last_region_name or "region"
         month_val = parse_month(month)
-        output_path = str(_out_dir() / f"{name}_trend_{start_year}_{end_year}_m{month_val}.png")
+        output_path = str(_out_dir(self.runtime) / f"{name}_trend_{start_year}_{end_year}_m{month_val}.png")
 
         result = generate_lst_trend_chart(
             roi=ee_geom, output_path=output_path,
@@ -166,14 +149,14 @@ class GeeLSTTrendChartTool(BaseTool):
 class GeeLSTTimelapseLocalTool(BaseTool):
     def execute(self, start_year=2015, end_year=2024, month=7, cloud_pct=30,
                 title="", fps=2, dpi=150, vmin=None, vmax=None) -> Dict[str, Any]:
-        ee_geom, err = _ensure_gee_and_roi(self.runtime)
+        ee_geom, err = ensure_gee_and_roi(self.runtime)
         if err:
             return err
 
         from gis.gee_timelapse import generate_lst_timelapse_local, parse_month
         from gis.web_map import generate_timelapse_web_map
 
-        gif_dir = str(_out_dir() / "timelapse")
+        gif_dir = str(_out_dir(self.runtime) / "timelapse")
         os.makedirs(gif_dir, exist_ok=True)
 
         result = generate_lst_timelapse_local(
@@ -192,7 +175,7 @@ class GeeLSTTimelapseLocalTool(BaseTool):
             years_ok = result.get("years_ok", [])
             if lst_tifs and years_ok:
                 m = parse_month(month)
-                web_path = str(_out_dir() / f"timelapse_lst_{start_year}_{end_year}_m{m}_interactive.html")
+                web_path = str(_out_dir(self.runtime) / f"timelapse_lst_{start_year}_{end_year}_m{m}_interactive.html")
                 web_result = generate_timelapse_web_map(
                     lst_tif_paths=lst_tifs, years=years_ok,
                     output_path=web_path,

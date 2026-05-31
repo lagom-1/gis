@@ -11,7 +11,9 @@ import config as app_config
 from tools.base import BaseTool, tool
 
 
-def _out_dir() -> Path:
+def _out_dir(runtime=None) -> Path:
+    if runtime:
+        return runtime.session_dir
     d = Path(app_config.OUTPUTS_DIR)
     d.mkdir(parents=True, exist_ok=True)
     return d
@@ -69,7 +71,7 @@ class ClassifyMapTool(_AnalysisBase):
         from gis.classify import classify_raster
         result = classify_raster(
             tif_path=tif,
-            output_png=str(_out_dir() / f"{_stem(tif)}_classified.png"),
+            output_png=str(_out_dir(self.runtime) / f"{_stem(tif)}_classified.png"),
             method=method, n_classes=int(n_classes),
             colormap=colormap, title=title, dpi=int(dpi),
         )
@@ -100,7 +102,7 @@ class ThresholdHighlightTool(_AnalysisBase):
         from gis.threshold import threshold_highlight
         result = threshold_highlight(
             tif_path=tif,
-            output_path=str(_out_dir() / f"{_stem(tif)}_threshold.png"),
+            output_path=str(_out_dir(self.runtime) / f"{_stem(tif)}_threshold.png"),
             operator=operator, value=float(value),
             value_upper=float(value_upper) if value_upper is not None else None,
             highlight_color=highlight_color, base_colormap=base_colormap,
@@ -128,8 +130,8 @@ class EnhanceRasterTool(_AnalysisBase):
         from gis.enhance import enhance_raster
         result = enhance_raster(
             tif_path=tif,
-            output_tif=str(_out_dir() / f"{_stem(tif)}_enhanced.tif"),
-            output_png=str(_out_dir() / f"{_stem(tif)}_enhanced.png"),
+            output_tif=str(_out_dir(self.runtime) / f"{_stem(tif)}_enhanced.tif"),
+            output_png=str(_out_dir(self.runtime) / f"{_stem(tif)}_enhanced.png"),
             method=method, kernel_size=int(kernel_size),
         )
         if result.get("success"):
@@ -157,6 +159,6 @@ class ProfileAnalysisTool(_AnalysisBase):
         from gis.profile import profile_analysis
         return profile_analysis(
             tif_path=tif,
-            output_png=str(_out_dir() / f"{_stem(tif)}_profile.png"),
+            output_png=str(_out_dir(self.runtime) / f"{_stem(tif)}_profile.png"),
             start=start, end=end, n_points=int(n_points),
         )

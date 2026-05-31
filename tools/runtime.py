@@ -23,6 +23,7 @@ class GISRuntime:
         self.last_region_geojson: Dict[str, Any] | None = None
         self.last_region_name: str | None = None
         self.map_style: Dict[str, Any] = dict(DEFAULT_MAP_STYLE)
+        self.preferences: Dict[str, Any] = {}
         self.output_files: List[Dict[str, Any]] = []
 
     @property
@@ -73,6 +74,7 @@ class GISRuntime:
             "last_region_geojson": region,
             "last_region_name": self.last_region_name,
             "map_style": dict(self.map_style),
+            "preferences": dict(self.preferences),
             "output_files": list(self.output_files),
         }
 
@@ -89,5 +91,7 @@ class GISRuntime:
         self.last_region_name = data.get("last_region_name") or self.last_region_name
         if data.get("map_style"):
             self.map_style.update(data["map_style"])
+        if data.get("preferences"):
+            self.preferences.update(data["preferences"])
         if data.get("output_files"):
             self.output_files = list(data["output_files"])

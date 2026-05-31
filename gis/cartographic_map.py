@@ -481,7 +481,7 @@ def generate_cartographic_map(
     tif_path: str,
     output_path: Optional[str] = None,
     title: str = "Land Surface Temperature (SCA)",
-    colormap: str = "jet",
+    colormap: str = "coolwarm",
     show_legend: bool = True,
     show_scalebar: bool = True,
     show_north: bool = True,

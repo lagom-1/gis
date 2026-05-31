@@ -6,10 +6,13 @@ import os
 from PIL import Image
 
 
-def show_image(image_path: str):
+def show_image(image_path: str) -> dict:
     if not os.path.exists(image_path):
-        print(f"图片不存在: {image_path}")
-        return
+        return {"success": False, "message": f"图片不存在: {image_path}"}
 
-    img = Image.open(image_path)
-    img.show()
+    try:
+        img = Image.open(image_path)
+        img.show()
+        return {"success": True, "message": f"已打开图片: {image_path}", "path": image_path}
+    except Exception as e:
+        return {"success": False, "message": f"打开图片失败: {e}"}

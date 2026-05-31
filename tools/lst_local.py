@@ -10,7 +10,9 @@ import config as app_config
 from tools.base import BaseTool, tool
 
 
-def _out_dir() -> Path:
+def _out_dir(runtime=None) -> Path:
+    if runtime:
+        return runtime.session_dir
     d = Path(app_config.OUTPUTS_DIR)
     d.mkdir(parents=True, exist_ok=True)
     return d
@@ -29,8 +31,8 @@ class RunLSTTool(BaseTool):
             return {"success": False, "message": "没有可用输入影像"}
         from gis.sca_runner import run_sca
         stem = Path(tif).stem
-        output_tif = str(_out_dir() / f"{stem}_lst.tif")
-        output_png = str(_out_dir() / f"{stem}_lst.png")
+        output_tif = str(_out_dir(self.runtime) / f"{stem}_lst.tif")
+        output_png = str(_out_dir(self.runtime) / f"{stem}_lst.png")
         result = run_sca(input_tif=tif, output_tif=output_tif, output_png=output_png)
         if result.get("success"):
             self.runtime.current_dataset = output_tif

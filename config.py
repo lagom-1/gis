@@ -41,6 +41,7 @@ def normalize_output_path(absolute_path: str) -> str:
 # ── 常见搜索根目录 ──────────────────────────────────────
 def default_search_roots():
     """返回用户电脑上的常见文件搜索路径"""
+    import string
     home = Path.home()
     roots = [
         Path.cwd(),
@@ -48,14 +49,16 @@ def default_search_roots():
         home / "Desktop",
         home / "Documents",
         home / "Downloads",
-        Path("/data"),
-        Path("/tmp"),
-        # Windows 常见盘符
-        Path("G:\\"),
-        Path("D:\\"),
-        Path("E:\\"),
-        Path("C:\\"),
     ]
+    # Windows：扫描所有可用盘符
+    if os.name == "nt":
+        for letter in string.ascii_uppercase:
+            drive = Path(f"{letter}:\\")
+            if drive.exists():
+                roots.append(drive)
+    else:
+        roots.extend([Path("/data"), Path("/tmp"), Path("/")])
+
     seen, out = set(), []
     for p in roots:
         if p.exists():
@@ -72,7 +75,7 @@ RASTER_EXTS = {".tif", ".tiff", ".img", ".jp2", ".vrt", ".asc", ".hdf", ".nc"}
 
 # ── 默认地图样式 ──────────────────────────────────────
 DEFAULT_MAP_STYLE = {
-    "colormap": "coolwarm",
+    "colormap": "viridis",
     "title": "专题图",
     "show_legend": True,
     "show_scalebar": True,
@@ -103,7 +106,7 @@ GEE_PROJECT = os.getenv("EARTHENGINE_PROJECT") or os.getenv("EE_PROJECT") or ""
 GEE_DRIVE_FOLDER = os.getenv("GEE_DRIVE_FOLDER", "GEE_Exports")
 
 GDRIVE_SYNC_DIR = Path(
-    os.getenv("GDRIVE_SYNC_DIR", r"G:\我的云端硬盘\GEE_Exports")
+    os.getenv("GDRIVE_SYNC_DIR", str(PROJECT_ROOT / "workspace" / "gee_exports"))
 )
 
 LOCAL_DRIVE_PATH = str(GDRIVE_SYNC_DIR)
@@ -129,10 +132,8 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 # ── JWT 配置 ──────────────────────────────────────────
 SECRET_KEY = os.getenv("SECRET_KEY", "")
 if not SECRET_KEY:
-    import sys
-    print("⚠️  未设置 SECRET_KEY 环境变量！请设置后重启。", file=sys.stderr)
-    print("   示例: export SECRET_KEY=$(openssl rand -hex 32)", file=sys.stderr)
-    SECRET_KEY = "opengis-dev-secret-key-change-in-production"
+    import secrets
+    SECRET_KEY = secrets.token_hex(32)
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_MINUTES = int(os.getenv("JWT_EXPIRE_MINUTES", "1440"))  # 默认 24 小时
 
@@ -158,7 +159,7 @@ CELERY_MAX_TASKS_PER_CHILD = int(os.getenv("CELERY_MAX_TASKS_PER_CHILD", "10"))
 # ── 默认用户偏好 ──────────────────────────────────────
 DEFAULT_PREFERENCES = {
     "export_format": "png",
-    "colormap": "coolwarm",
+    "colormap": "viridis",
     "classification_method": "natural_breaks",
     "n_classes": 5,
     "legend_position": "right",

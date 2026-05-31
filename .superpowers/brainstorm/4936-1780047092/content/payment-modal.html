@@ -1,0 +1,175 @@
+<h2>收费弹窗设计</h2>
+<p class="subtitle">点击下载按钮后弹出，提供两种下载方式</p>
+
+<div class="section">
+  <h3>整体布局</h3>
+  <p class="subtitle">左右分栏，左侧分享免费，右侧付费下载</p>
+
+  <div class="mockup">
+    <div class="mockup-header">收费弹窗</div>
+    <div class="mockup-body" style="padding: 0;">
+      <div style="max-width: 600px; margin: 0 auto; background: white; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.15);">
+        {/* 头部 */}
+        <div style="padding: 20px 24px; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center;">
+          <h3 style="font-size: 18px; font-weight: 600; color: #111827; margin: 0;">下载文件</h3>
+          <button style="background: none; border: none; color: #9ca3af; cursor: pointer; font-size: 20px;">✕</button>
+        </div>
+
+        {/* 内容区 */}
+        <div style="display: flex; gap: 0;">
+          {/* 左侧：分享免费下载 */}
+          <div style="flex: 1; padding: 24px; border-right: 1px solid #e5e7eb;">
+            <div style="text-align: center;">
+              <div style="width: 48px; height: 48px; background: #ecfdf5; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 16px;">
+                <span style="font-size: 24px;">🔗</span>
+              </div>
+              <h4 style="font-size: 16px; font-weight: 600; color: #111827; margin: 0 0 8px;">分享免费下载</h4>
+              <p style="font-size: 13px; color: #6b7280; margin: 0 0 20px; line-height: 1.5;">
+                分享 OpenGIS 项目到 GitHub<br>
+                即可免费下载 1 次
+              </p>
+
+              {/* GitHub 链接 */}
+              <div style="background: #f3f4f6; border-radius: 8px; padding: 12px; margin-bottom: 16px;">
+                <div style="font-size: 12px; color: #9ca3af; margin-bottom: 8px;">项目链接</div>
+                <div style="display: flex; gap: 8px;">
+                  <input type="text" value="https://github.com/lagom-1/gis/tree/master" readonly
+                    style="flex: 1; padding: 8px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 12px; background: white;">
+                  <button style="padding: 8px 16px; background: #059669; color: white; border: none; border-radius: 6px; font-size: 12px; cursor: pointer;">
+                    复制
+                  </button>
+                </div>
+              </div>
+
+              {/* 我已分享按钮 */}
+              <button style="width: 100%; padding: 12px; background: #059669; color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 500; cursor: pointer;">
+                ✓ 我已分享，下载文件
+              </button>
+
+              <div style="font-size: 11px; color: #9ca3af; margin-top: 12px;">
+                本周剩余 2/3 次免费下载
+              </div>
+            </div>
+          </div>
+
+          {/* 右侧：付费下载 */}
+          <div style="flex: 1; padding: 24px;">
+            <div style="text-align: center;">
+              <div style="width: 48px; height: 48px; background: #fef3c7; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 16px;">
+                <span style="font-size: 24px;">💰</span>
+              </div>
+              <h4 style="font-size: 16px; font-weight: 600; color: #111827; margin: 0 0 8px;">付费下载</h4>
+              <p style="font-size: 13px; color: #6b7280; margin: 0 0 20px; line-height: 1.5;">
+                扫码支付后即可下载<br>
+                支持微信支付
+              </p>
+
+              {/* 价格显示 */}
+              <div style="background: #fef3c7; border-radius: 8px; padding: 16px; margin-bottom: 16px;">
+                <div style="font-size: 12px; color: #92400e; margin-bottom: 8px;">本次下载费用</div>
+                <div style="font-size: 32px; font-weight: 700; color: #d97706;">¥3.50</div>
+              </div>
+
+              {/* 微信收款码 */}
+              <div style="background: #f3f4f6; border-radius: 8px; padding: 16px; margin-bottom: 16px;">
+                <div style="font-size: 12px; color: #9ca3af; margin-bottom: 12px;">微信扫码支付</div>
+                <div style="width: 120px; height: 120px; background: white; border: 1px solid #d1d5db; border-radius: 8px; margin: 0 auto; display: flex; align-items: center; justify-content: center;">
+                  <span style="font-size: 11px; color: #9ca3af;">收款码图片</span>
+                </div>
+              </div>
+
+              {/* 我已支付按钮 */}
+              <button style="width: 100%; padding: 12px; background: #d97706; color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 500; cursor: pointer;">
+                ✓ 我已支付，下载文件
+              </button>
+
+              <div style="font-size: 11px; color: #9ca3af; margin-top: 12px;">
+                支付后请稍等片刻，系统将自动确认
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>交互流程</h3>
+  <p class="subtitle">用户操作流程</p>
+
+  <div class="options">
+    <div class="option" data-choice="share-flow">
+      <div class="letter">🔗</div>
+      <div class="content">
+        <h3>分享免费流程</h3>
+        <p>点击下载 → 复制链接 → 打开 GitHub → 返回页面 → 点击「我已分享」→ 下载</p>
+      </div>
+    </div>
+    <div class="option" data-choice="pay-flow">
+      <div class="letter">💰</div>
+      <div class="content">
+        <h3>付费下载流程</h3>
+        <p>点击下载 → 扫码支付 → 点击「我已支付」→ 等待确认 → 下载</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>状态管理</h3>
+  <p class="subtitle">弹窗显示的状态</p>
+
+  <div class="options">
+    <div class="option" data-choice="initial">
+      <div class="letter">1</div>
+      <div class="content">
+        <h3>初始状态</h3>
+        <p>显示两个选项，用户可选择分享或付费</p>
+      </div>
+    </div>
+    <div class="option" data-choice="copied">
+      <div class="letter">2</div>
+      <div class="content">
+        <h3>已复制状态</h3>
+        <p>复制链接后，「我已分享」按钮变为可点击</p>
+      </div>
+    </div>
+    <div class="option" data-choice="paid">
+      <div class="letter">3</div>
+      <div class="content">
+        <h3>已支付状态</h3>
+        <p>点击「我已支付」后，显示「等待确认」状态</p>
+      </div>
+    </div>
+    <div class="option" data-choice="confirmed">
+      <div class="letter">4</div>
+      <div class="content">
+        <h3>已确认状态</h3>
+        <p>管理员确认后，自动开始下载</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>数据存储</h3>
+  <p class="subtitle">需要记录的数据</p>
+
+  <div class="options">
+    <div class="option" data-choice="share-record">
+      <div class="letter">📊</div>
+      <div class="content">
+        <h3>分享记录</h3>
+        <p>用户 ID、分享时间、下载次数（每周重置）</p>
+      </div>
+    </div>
+    <div class="option" data-choice="payment-record">
+      <div class="letter">💳</div>
+      <div class="content">
+        <h3>支付记录</h3>
+        <p>用户 ID、任务 ID、金额、支付状态、创建时间</p>
+      </div>
+    </div>
+  </div>
+</div>

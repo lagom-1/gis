@@ -1,0 +1,3 @@
+{"type":"click","text":"🎨\n      \n        颜色系统\n        主色 #059669，渐变 #059669 → #10b981，背景 #f8fafc","choice":"colors","id":null,"timestamp":1780025340235}
+{"type":"click","text":"🔐\n      \n        认证方式\n        密码登录 + 邮箱验证码 + 微信 + 企业微信","choice":"auth","id":null,"timestamp":1780025341472}
+{"type":"click","text":"📱\n      \n        响应式\n        桌面端左右分栏，移动端上下布局","choice":"responsive","id":null,"timestamp":1780025341930}

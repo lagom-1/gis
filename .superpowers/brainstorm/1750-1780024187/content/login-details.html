@@ -1,0 +1,156 @@
+<h2>方案 B 详细设计</h2>
+<p class="subtitle">生态绿色主题 + 左右分栏 + 多种认证方式</p>
+
+<div class="section">
+  <h3>1. 认证方式切换</h3>
+  <p class="subtitle">支持密码登录、邮箱验证码登录、国内平台登录</p>
+
+  <div class="mockup">
+    <div class="mockup-header">登录方式切换</div>
+    <div class="mockup-body" style="padding: 20px;">
+      <div style="display: flex; gap: 8px; margin-bottom: 20px;">
+        <div style="padding: 8px 16px; background: #059669; color: white; border-radius: 6px; font-size: 13px; font-weight: 500;">密码登录</div>
+        <div style="padding: 8px 16px; background: #f1f5f9; border-radius: 6px; font-size: 13px; color: #64748b;">验证码登录</div>
+        <div style="padding: 8px 16px; background: #f1f5f9; border-radius: 6px; font-size: 13px; color: #64748b;">第三方登录</div>
+      </div>
+
+      <div style="display: none;" id="password-form">
+        <div style="margin-bottom: 12px;">
+          <label style="display: block; font-size: 13px; font-weight: 500; color: #374151; margin-bottom: 6px;">邮箱地址</label>
+          <input type="email" placeholder="请输入邮箱" style="width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px;">
+        </div>
+        <div style="margin-bottom: 20px;">
+          <label style="display: block; font-size: 13px; font-weight: 500; color: #374151; margin-bottom: 6px;">密码</label>
+          <input type="password" placeholder="请输入密码" style="width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px;">
+        </div>
+      </div>
+
+      <div style="display: block;" id="code-form">
+        <div style="margin-bottom: 12px;">
+          <label style="display: block; font-size: 13px; font-weight: 500; color: #374151; margin-bottom: 6px;">邮箱地址</label>
+          <input type="email" placeholder="请输入邮箱" style="width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px;">
+        </div>
+        <div style="margin-bottom: 20px;">
+          <label style="display: block; font-size: 13px; font-weight: 500; color: #374151; margin-bottom: 6px;">验证码</label>
+          <div style="display: flex; gap: 8px;">
+            <input type="text" placeholder="请输入验证码" style="flex: 1; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px;">
+            <button style="padding: 10px 16px; background: #059669; color: white; border: none; border-radius: 6px; font-size: 13px; cursor: pointer;">发送验证码</button>
+          </div>
+        </div>
+      </div>
+
+      <button style="width: 100%; padding: 12px; background: #059669; color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 500; cursor: pointer;">登录</button>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>2. 表单状态</h3>
+  <p class="subtitle">默认、聚焦、错误、加载四种状态</p>
+
+  <div class="split">
+    <div class="mockup">
+      <div class="mockup-header">默认状态</div>
+      <div class="mockup-body" style="padding: 20px;">
+        <div style="margin-bottom: 12px;">
+          <label style="display: block; font-size: 13px; font-weight: 500; color: #374151; margin-bottom: 6px;">邮箱地址</label>
+          <input type="email" placeholder="请输入邮箱" style="width: 100%; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px;">
+        </div>
+      </div>
+    </div>
+
+    <div class="mockup">
+      <div class="mockup-header">聚焦状态</div>
+      <div class="mockup-body" style="padding: 20px;">
+        <div style="margin-bottom: 12px;">
+          <label style="display: block; font-size: 13px; font-weight: 500; color: #059669; margin-bottom: 6px;">邮箱地址</label>
+          <input type="email" placeholder="请输入邮箱" style="width: 100%; padding: 10px 12px; border: 2px solid #059669; border-radius: 6px; font-size: 14px; outline: none;">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="split">
+    <div class="mockup">
+      <div class="mockup-header">错误状态</div>
+      <div class="mockup-body" style="padding: 20px;">
+        <div style="margin-bottom: 12px;">
+          <label style="display: block; font-size: 13px; font-weight: 500; color: #dc2626; margin-bottom: 6px;">邮箱地址</label>
+          <input type="email" value="invalid-email" style="width: 100%; padding: 10px 12px; border: 2px solid #dc2626; border-radius: 6px; font-size: 14px;">
+          <p style="font-size: 12px; color: #dc2626; margin-top: 4px;">请输入有效的邮箱地址</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="mockup">
+      <div class="mockup-header">加载状态</div>
+      <div class="mockup-body" style="padding: 20px;">
+        <button style="width: 100%; padding: 12px; background: #9ca3af; color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 500; cursor: not-allowed; display: flex; align-items: center; justify-content: center; gap: 8px;">
+          <span style="display: inline-block; width: 16px; height: 16px; border: 2px solid white; border-top-color: transparent; border-radius: 50%; animation: spin 1s linear infinite;"></span>
+          登录中...
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>3. 第三方登录</h3>
+  <p class="subtitle">支持微信登录</p>
+
+  <div class="mockup">
+    <div class="mockup-header">第三方登录选项</div>
+    <div class="mockup-body" style="padding: 20px;">
+      <div style="text-align: center; margin-bottom: 16px; font-size: 13px; color: #6b7280;">或使用以下方式登录</div>
+      <div style="display: flex; justify-content: center; gap: 16px;">
+        <div style="display: flex; flex-direction: column; align-items: center; gap: 6px; cursor: pointer;">
+          <div style="width: 48px; height: 48px; background: #07c160; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 20px; color: white;">微</div>
+          <span style="font-size: 11px; color: #6b7280;">微信</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>4. 响应式设计</h3>
+  <p class="subtitle">移动端适配方案</p>
+
+  <div class="split">
+    <div class="mockup">
+      <div class="mockup-header">桌面端 (>1024px)</div>
+      <div class="mockup-body" style="padding: 20px;">
+        <div style="display: flex; height: 200px; background: #f8fafc; border-radius: 8px; overflow: hidden;">
+          <div style="flex: 1; background: linear-gradient(135deg, #059669 0%, #10b981 100%); padding: 20px; color: white;">
+            <div style="font-size: 16px; font-weight: bold;">OpenGIS</div>
+            <div style="font-size: 11px; opacity: 0.8; margin-top: 8px;">AI 遥感分析平台</div>
+          </div>
+          <div style="flex: 1; padding: 20px; background: white;">
+            <div style="font-size: 14px; font-weight: 600; color: #1e293b;">登录</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="mockup">
+      <div class="mockup-header">移动端 (<768px)</div>
+      <div class="mockup-body" style="padding: 20px;">
+        <div style="background: #f8fafc; border-radius: 8px; overflow: hidden;">
+          <div style="background: linear-gradient(135deg, #059669 0%, #10b981 100%); padding: 16px; color: white; text-align: center;">
+            <div style="font-size: 16px; font-weight: bold;">OpenGIS</div>
+            <div style="font-size: 11px; opacity: 0.8; margin-top: 4px;">AI 遥感分析平台</div>
+          </div>
+          <div style="padding: 16px; background: white;">
+            <div style="font-size: 14px; font-weight: 600; color: #1e293b; text-align: center;">登录</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<style>
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+</style>

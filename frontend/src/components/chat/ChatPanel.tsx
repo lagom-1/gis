@@ -105,10 +105,6 @@ export function ChatPanel({ convId, messages, onNewMessage, onToolResult, onSend
           toolCalls={toolCalls}
           phase={phase}
           answer={answer}
-          step={toolCalls.length > 0 ? toolCalls.filter(tc => tc.status !== 'running').length + 1 : 0}
-          maxSteps={undefined}
-          currentTool={toolCalls[toolCalls.length - 1]?.tool}
-          reason={toolCalls[toolCalls.length - 1]?.reason}
           hideTools={hideTools}
         />
         <ExamplePrompts onSelect={handleSend} />

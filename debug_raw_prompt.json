@@ -1,0 +1,432 @@
+{
+  "system": "你是一个 GIS 遥感智能助手，与用户进行多轮对话。你可以调用工具帮助用户完成遥感分析任务。\n\n## 铁律（违反将导致严重错误）\n\n1. **严禁使用 search_local_files！** 绝对不允许搜索本地磁盘上已有的旧 TIF 文件。所有原始栅格数据必须通过 GEE 接口（gee_download_lst / gee_download_landsat_sca 等）实时下载到 workspace/outputs/ 目录。\n2. **必须完整走 GEE 下载流程**：resolve_admin_region → gee_download_xxx → set_current_dataset → 后续分析/制图\n3. **一个工具跑完再跑下一个**，不要一次计划多步\n\n## 行动指南\n\n- 用户要求下载数据时，必须先 resolve_admin_region 解析行政区，然后用 gee_download_lst / gee_download_landsat_sca 从 GEE 真实下载\n- 下载完成后用 set_current_dataset 注册数据集路径，再继续后续操作\n- set_current_dataset 成功后，根据用户需求选择 make_thematic_map 或 generate_web_map\n- 用户要求复合任务时（如\"分类并增强\"），请依次执行每个步骤\n- 用户要求\"换配色/改指北针\"时，请调用 set_map_style\n- 需要生成报告前，请先调用 statistics 获取统计数据\n- GEE 工作流：resolve_admin_region → gee_download_xxx → set_current_dataset → (make_thematic_map 或 generate_web_map 或后续分析)\n- 用户要求\"web地图\"\"交互式地图\"\"在线地图\"\"可缩放地图\"时，请调用 generate_web_map 而非 make_thematic_map\n\n## 工具速查\n\n| 场景 | 工具链 |\n|------|--------|\n| GEE 下载 LST | resolve_admin_region → gee_download_lst → set_current_dataset → make_thematic_map |\n| GEE 下载 Landsat | resolve_admin_region → gee_download_landsat_sca → run_lst → make_thematic_map |\n| 交互式Web地图 | set_current_dataset → generate_web_map |\n| 改样式 | set_map_style (自动出图) |\n| 分类/增强/统计 | classify_map / enhance_raster / statistics |\n| 剖面/3D | profile_analysis / view_3d |\n| 时间序列 | gee_lst_timelapse / gee_lst_timelapse_local |\n| GIF/趋势/报告 | gee_lst_timelapse_local / gee_lst_trend_chart / generate_report |\n\n## 回复格式\n\n调用工具（当前步骤尚未完成时使用）：\n{{\"type\": \"tool_call\", \"tool\": \"工具名\", \"args\": {{\"参数\": \"值\"}}, \"reason\": \"简明理由\"}}\n\n任务完成（仅当所有工具均已成功执行后才使用此格式）：\n{{\"type\": \"final\", \"answer\": \"任务总结（包含关键数值/文件列表）\"}}\n",
+  "payload": {
+    "user_input": "把图例放到右边",
+    "conversation_history": "[助手]: (调用 set_current_dataset)\n[系统]: set_current_dataset 成功 - 当前数据已切换\n[助手]: (调用 make_thematic_map)\n[系统]: make_thematic_map 成功 - GIS 标准制图生成完成\n[助手]: (调用 make_thematic_map)\n[系统]: make_thematic_map 成功 - GIS 标准制图生成完成\n[助手]: (调用 set_current_dataset)\n[系统]: set_current_dataset 成功 - 当前数据已切换\n[助手]: (调用 make_thematic_map)\n[系统]: make_thematic_map 成功 - GIS 标准制图生成完成\n[助手]: (调用 make_thematic_map)\n[系统]: make_thematic_map 成功 - GIS 标准制图生成完成\n[助手]: (调用 set_current_dataset)\n[系统]: set_current_dataset 成功 - 当前数据已切换\n[助手]: (调用 make_thematic_map)\n[系统]: make_thematic_map 成功 - GIS 标准制图生成完成\n[助手]: (调用 set_current_dataset)\n[系统]: set_current_dataset 成功 - 当前数据已切换\n[助手]: (调用 make_thematic_map)\n[系统]: make_thematic_map 成功 - GIS 标准制图生成完成\n[助手]: (调用 set_current_dataset)\n[系统]: set_current_dataset 成功 - 当前数据已切换\n[助手]: (调用 make_thematic_map)\n[系统]: make_thematic_map 成功 - GIS 标准制图生成完成\n[助手]: (调用 set_current_dataset)\n[系统]: set_current_dataset 成功 - 当前数据已切换\n[助手]: (调用 make_thematic_map)\n[系统]: make_thematic_map 成功 - GIS 标准制图生成完成\n[助手]: 当前数据集已设置为 `D:/opengis/workspace/outputs/温江区_2020_02_lst.tif`，专题图已成功生成并保存至 `D:\\opengis\\workspace\\outputs\\session_13\\温江区_2020_02_lst_LST专题图.png`。温度范围 0.0°C ~ 21.74°C，数据尺寸 1000×955 像素。\n[用户]: 把图例放到右边\n\n[用户]（当前消息）: 把图例放到右边",
+    "step": 1,
+    "tools": [
+      {
+        "name": "statistics",
+        "description": "对当前单波段栅格做统计分析并输出直方图。",
+        "parameters": {
+          "tif_path": "可选，栅格路径"
+        },
+        "category": "analysis"
+      },
+      {
+        "name": "classify_map",
+        "description": "对当前单波段结果自动分类并出分类图。",
+        "parameters": {
+          "method": "natural_breaks/equal_interval/quantile，默认 natural_breaks",
+          "n_classes": "分类数，默认 5",
+          "colormap": "配色方案，默认 YlOrRd"
+        },
+        "category": "analysis"
+      },
+      {
+        "name": "threshold_highlight",
+        "description": "高亮超过阈值或位于某个区间的区域。",
+        "parameters": {
+          "operator": ">/< /between/outside",
+          "value": "阈值",
+          "value_upper": "上限（between/outside 时使用）",
+          "highlight_color": "高亮颜色，默认 red",
+          "base_colormap": "底色配色，默认 gray"
+        },
+        "category": "analysis"
+      },
+      {
+        "name": "enhance_raster",
+        "description": "对当前栅格做增强或去噪（高斯/中值/直方图均衡/锐化）。",
+        "parameters": {
+          "method": "gaussian/median/histogram_eq/clahe/sharpen",
+          "kernel_size": "核大小，默认 5"
+        },
+        "category": "analysis"
+      },
+      {
+        "name": "profile_analysis",
+        "description": "对当前栅格做剖面分析。",
+        "parameters": {
+          "start": "起点[col,row]",
+          "end": "终点[col,row]",
+          "n_points": "采样点数，默认 200"
+        },
+        "category": "analysis"
+      },
+      {
+        "name": "search_local_files",
+        "description": "在本地电脑常见目录中搜索文件，适合根据模糊文件名找影像或 GeoJSON",
+        "parameters": {
+          "query": "要查找的文件名或关键词",
+          "roots": "可选，搜索根目录列表",
+          "extensions": "可选扩展名列表"
+        },
+        "category": "data"
+      },
+      {
+        "name": "set_current_dataset",
+        "description": "将某个找到的栅格文件设置为当前工作数据",
+        "parameters": {
+          "path": "本地文件完整路径"
+        },
+        "category": "data"
+      },
+      {
+        "name": "inspect_raster",
+        "description": "读取当前或指定栅格的波段、值域、分辨率、CRS、产品类型推断",
+        "parameters": {
+          "path": "可选，栅格路径，不填则使用当前数据集"
+        },
+        "category": "data"
+      },
+      {
+        "name": "resolve_admin_region",
+        "description": "根据中国市/县/区名称，从本地 GeoJSON 中自动匹配行政边界，返回 GeoJSON 与 bbox",
+        "parameters": {
+          "region_name": "行政区名称，如 广元市 / 旺苍县 / 广元市旺苍县"
+        },
+        "category": "data"
+      },
+      {
+        "name": "export_result",
+        "description": "把最近结果图导出为 png/jpg/pdf/tif。",
+        "parameters": {
+          "format": "png/jpg/pdf/tif",
+          "input_path": "可选，输入路径",
+          "dpi": "分辨率，默认 300"
+        },
+        "category": "export"
+      },
+      {
+        "name": "generate_report",
+        "description": "生成带文字解读的图文实验报告（HTML格式）。",
+        "parameters": {
+          "title": "报告标题",
+          "subtitle": "副标题",
+          "conclusion": "总结文字",
+          "format": "html或pdf",
+          "images": "可选，指定要包含的图片路径列表"
+        },
+        "category": "export"
+      },
+      {
+        "name": "extract_timeseries_to_point",
+        "description": "从 GEE ImageCollection 提取指定经纬度点的时间序列数据，输出 CSV 和折线图。",
+        "parameters": {
+          "lat": "纬度",
+          "lon": "经度",
+          "image_collection_id": "GEE ImageCollection ID，如 ECMWF/ERA5_LAND/DAILY_AGGR",
+          "band_names": "要提取的波段名列表，如 [temperature_2m]",
+          "start_date": "起始日期 YYYY-MM-DD",
+          "end_date": "结束日期 YYYY-MM-DD",
+          "scale": "采样分辨率（米），默认 1000",
+          "title": "图表标题"
+        },
+        "category": "analysis"
+      },
+      {
+        "name": "dynamic_world_landcover",
+        "description": "获取 Dynamic World 10m 分辨率全球土地覆盖分类（9类：水体/树木/草地/淹没植被/农作物/灌木/建筑/裸地/冰雪）。",
+        "parameters": {
+          "start_date": "起始日期",
+          "end_date": "结束日期",
+          "return_type": "class（原始分类值）或 hillshade（带阴影可视化）",
+          "scale": "导出分辨率，默认 10",
+          "title": "专题图标题"
+        },
+        "category": "analysis"
+      },
+      {
+        "name": "ee_unsupervised_classify",
+        "description": "在 GEE 端执行无监督分类（K-Means 聚类），自动采样训练数据并分类，输出 TIF 和专题图。",
+        "parameters": {
+          "n_clusters": "聚类数，默认 5",
+          "scale": "分辨率，默认 30",
+          "start_date": "日期范围起始",
+          "end_date": "日期范围结束",
+          "band_names": "分类波段列表",
+          "title": "专题图标题"
+        },
+        "category": "analysis"
+      },
+      {
+        "name": "generate_timeslider_map",
+        "description": "生成带时间滑块的交互式 HTML 地图，用户可拖动滑块查看不同时期的影像变化。",
+        "parameters": {
+          "image_collection_id": "GEE ImageCollection ID",
+          "start_date": "起始日期",
+          "end_date": "结束日期",
+          "band_names": "波段名列表",
+          "opacity": "透明度，默认 0.8"
+        },
+        "category": "visualization"
+      },
+      {
+        "name": "gee_zonal_statistics",
+        "description": "按区域计算影像的分区统计量（mean/min/max/std/sum），输出 CSV。支持行政区划统计。",
+        "parameters": {
+          "image_id": "GEE 影像 ID 或本地 TIF 路径",
+          "stat_type": "统计类型 mean/min/max/median/std/sum，默认 MEAN",
+          "scale": "分析分辨率（米），默认 1000"
+        },
+        "category": "analysis"
+      },
+      {
+        "name": "gee_init",
+        "description": "初始化 Google Earth Engine 认证与项目配置。需要时调用，授权只需一次。",
+        "parameters": {
+          "project_id": "可选，GEE 项目 ID",
+          "force_auth": "是否强制重新认证 true/false"
+        },
+        "category": "data"
+      },
+      {
+        "name": "gee_compute_lst",
+        "description": "【推荐】在 GEE 云端直接进行单通道地表温度反演，仅下载单波段 LST(°C) TIF。一步完成，无需后续本地 run_lst。",
+        "parameters": {
+          "start_date": "开始日期 YYYY-MM-DD，缺省时默认上一个完整自然月",
+          "end_date": "结束日期 YYYY-MM-DD，缺省时默认上一个完整自然月",
+          "cloud_pct": "最大云量百分比 0-100，默认 30",
+          "scale": "分辨率(米)，默认 30"
+        },
+        "category": "data"
+      },
+      {
+        "name": "gee_download_landsat_sca",
+        "description": "从 GEE 下载适合本地 SCA 单通道地表温度反演的 Landsat 8/9 Level-2 三波段数据（red, nir, bt_raw）。已不推荐，优先使用 gee_compute_lst。",
+        "parameters": {
+          "start_date": "开始日期 YYYY-MM-DD",
+          "end_date": "结束日期 YYYY-MM-DD",
+          "region": "AOI，可传 [xmin,ymin,xmax,ymax] 或 GeoJSON Feature",
+          "region_path": "可选，本地 GeoJSON 文件路径",
+          "scale": "导出分辨率，默认30",
+          "cloud_pct": "最大云量百分比，默认30",
+          "reducer": "median/mean/mosaic/first，默认 median",
+          "mask_clouds": "是否在 GEE 端像素级去云，默认 true"
+        },
+        "category": "data"
+      },
+      {
+        "name": "gee_download_monthly_lst",
+        "description": "月度 LST 智能合成（分级降级）。自动选取当月最优 Landsat 8/9 场景，逐景 SCA 单通道反演后合成，输出单波段 LST（°C）。若未给日期，默认上一个完整自然月。",
+        "parameters": {
+          "start_date": "开始日期 YYYY-MM-DD，缺省时默认上一个完整自然月",
+          "end_date": "结束日期 YYYY-MM-DD，缺省时默认上一个完整自然月",
+          "scale": "导出分辨率，默认30"
+        },
+        "category": "data"
+      },
+      {
+        "name": "gee_download_yearly_lst",
+        "description": "批量下载全年（或指定月份）的月度 LST。在 GEE 云端逐月执行分级降级选景 + 逐景 SCA 反演。默认下载全年12个月。需要先用 resolve_admin_region 设置研究区。",
+        "parameters": {
+          "year": "年份，如 2025",
+          "months": "可选，要下载的月份列表，如 [1,2,3,4,5,6]。不传则默认全部 12 个月",
+          "output_dir": "输出目录，存放各月的 TIF 文件",
+          "scale": "导出分辨率，默认30"
+        },
+        "category": "data"
+      },
+      {
+        "name": "gee_download_multi_year_lst",
+        "description": "跨多年单月 LST 批量反演。对指定年份范围内每一年的同一月份，执行分级降级选景 + 逐景 SCA 反演，输出 N 个单波段 LST TIF（°C）。典型用法：'2020-2025年每年8月的地表温度'。",
+        "parameters": {
+          "start_year": "起始年份，如 2020",
+          "end_year": "结束年份，如 2025",
+          "month": "月份 1-12，如 8 表示每年8月",
+          "output_dir": "输出目录，存放各年的 TIF 文件",
+          "scale": "导出分辨率，默认30"
+        },
+        "category": "data"
+      },
+      {
+        "name": "gee_lst_timelapse",
+        "description": "在 GEE 端完成多年指定月份 LST 反演并生成时间序列 GIF 动画。需要先用 resolve_admin_region 设置研究区。",
+        "parameters": {
+          "start_year": "起始年份，默认 2015",
+          "end_year": "结束年份（含），默认 2024",
+          "month": "月份（1-12 或中文如'七月'），默认 7",
+          "cloud_pct": "最大云量百分比，默认 30",
+          "title": "GIF 标题，缺省自动生成",
+          "fps": "帧率，默认 2",
+          "dimensions": "图片尺寸（像素），默认 600",
+          "vmin": "色标最小值（°C），默认 20",
+          "vmax": "色标最大值（°C），默认 45"
+        },
+        "category": "visualization"
+      },
+      {
+        "name": "gee_lst_split_panel",
+        "description": "生成两年指定月份 LST 的分屏对比交互式地图（HTML），可在浏览器中左右拖动对比。",
+        "parameters": {
+          "year_a": "第一年，默认 2015",
+          "year_b": "第二年，默认 2024",
+          "month": "月份，默认 7",
+          "cloud_pct": "最大云量百分比，默认 30",
+          "vmin": "色标最小值（°C），默认 20",
+          "vmax": "色标最大值（°C），默认 45"
+        },
+        "category": "visualization"
+      },
+      {
+        "name": "gee_lst_trend_chart",
+        "description": "生成多年指定月份 LST 均值变化折线图（含极值范围阴影），用于分析温度年际趋势。",
+        "parameters": {
+          "start_year": "起始年份，默认 2015",
+          "end_year": "结束年份（含），默认 2024",
+          "month": "月份，默认 7",
+          "cloud_pct": "最大云量百分比，默认 30",
+          "title": "图表标题，缺省自动生成"
+        },
+        "category": "visualization"
+      },
+      {
+        "name": "gee_lst_timelapse_local",
+        "description": "【推荐】逐年从 GEE 下载 Landsat 数据到本地，本地执行 LST 反演，再合成 GIF 动画。比 GEE 端合成更稳定可靠。",
+        "parameters": {
+          "start_year": "起始年份，默认 2015",
+          "end_year": "结束年份（含），默认 2024",
+          "month": "月份（1-12 或中文如'七月'），默认 7",
+          "cloud_pct": "最大云量百分比，默认 30",
+          "title": "GIF 标题，缺省自动生成",
+          "fps": "帧率，默认 2",
+          "dpi": "输出图片分辨率，默认 150",
+          "vmin": "色标最小值（°C），默认自动",
+          "vmax": "色标最大值（°C），默认自动"
+        },
+        "category": "visualization"
+      },
+      {
+        "name": "run_lst",
+        "description": "对当前多波段影像执行地表温度反演（SCA算法），生成 LST 栅格和预览图。",
+        "parameters": {
+          "input_tif": "可选，输入栅格路径"
+        },
+        "category": "analysis"
+      },
+      {
+        "name": "set_map_style",
+        "description": "更新地图样式参数。绝对位置用 legend_position/scalebar_position/north_position，微调偏移用 legend_xoffset/yoffset、north_xoffset/yoffset、scalebar_xoffset/yoffset。",
+        "parameters": {
+          "title": "标题",
+          "colormap": "配色方案",
+          "legend_position": "图例绝对位置 right/left/upper right/lower left 等",
+          "legend_xoffset": "图例 X 偏移（用于微调，如 0.02 或 -0.02）",
+          "legend_yoffset": "图例 Y 偏移（用于微调）",
+          "dpi": "分辨率",
+          "show_legend": "是否显示图例",
+          "show_scalebar": "是否显示比例尺",
+          "show_north": "是否显示指北针"
+        },
+        "category": "system"
+      },
+      {
+        "name": "update_preferences",
+        "description": "更新长期用户偏好（默认导出格式、分类数、配色等）。",
+        "parameters": {
+          "export_format": "导出格式",
+          "n_classes": "默认分类数",
+          "colormap": "默认配色"
+        },
+        "category": "system"
+      },
+      {
+        "name": "summarize_context",
+        "description": "返回当前会话上下文摘要。",
+        "parameters": {},
+        "category": "system"
+      },
+      {
+        "name": "view_3d",
+        "description": "将当前单波段栅格生成 3D 可视化。",
+        "parameters": {
+          "elevation": "俯仰角，默认 45",
+          "azimuth": "方位角，默认 225",
+          "vertical_exaggeration": "垂直夸张系数，默认 1.0",
+          "colormap": "配色方案，默认 terrain",
+          "render_mode": "surface/wireframe/contour，默认 surface"
+        },
+        "category": "visualization"
+      },
+      {
+        "name": "compare_views",
+        "description": "对比原始图和当前结果图。",
+        "parameters": {
+          "mode": "side_by_side 或 difference"
+        },
+        "category": "visualization"
+      },
+      {
+        "name": "transform_raster",
+        "description": "对当前栅格做翻转或旋转。",
+        "parameters": {
+          "operation": "flip_h/flip_v/rotate_90/rotate_180/rotate_270"
+        },
+        "category": "visualization"
+      },
+      {
+        "name": "make_thematic_map",
+        "description": "将当前单波段结果做成标准专题图（含图例、比例尺、指北针）。",
+        "parameters": {
+          "title": "标题",
+          "colormap": "配色方案",
+          "legend_position": "图例位置",
+          "dpi": "分辨率，默认 300",
+          "tif_path": "可选，栅格路径"
+        },
+        "category": "visualization"
+      },
+      {
+        "name": "generate_web_map",
+        "description": "生成交互式 Web 地图（Leaflet HTML）。支持鼠标悬停查看坐标、图层切换、热力图叠加。",
+        "parameters": {
+          "title": "地图标题",
+          "colormap": "配色方案",
+          "show_heatmap": "是否显示热力图(true/false)",
+          "overlay_opacity": "透明度(0~1)",
+          "tif_path": "可选，栅格路径"
+        },
+        "category": "visualization"
+      }
+    ],
+    "runtime": {
+      "current_dataset": null,
+      "source_dataset": null,
+      "last_output": null,
+      "last_region_name": null,
+      "has_last_region_geojson": false,
+      "map_style": {
+        "colormap": "viridis",
+        "title": "专题图",
+        "show_legend": true,
+        "show_scalebar": true,
+        "show_north": true,
+        "dpi": 300,
+        "legend_position": "left",
+        "scalebar_position": "lower left",
+        "north_position": "upper right",
+        "alpha": 1.0,
+        "bg_color": "#EFEFEF",
+        "title_fontsize": 18,
+        "legend_tick_fontsize": 10,
+        "legend_label_fontsize": 12,
+        "legend_shrink": 0.88,
+        "scalebar_fontsize": 10,
+        "scalebar_length_ratio": 0.16,
+        "north_fontsize": 13,
+        "title_color": "#1A1A1A",
+        "frame": true,
+        "grid": false,
+        "map_margin": 0.035,
+        "map_frame_scale": 0.94
+      }
+    },
+    "stage": "idle",
+    "stage_hint": "",
+    "output_count": 0,
+    "last_result": null,
+    "loop_warning": "",
+    "dag_directive": ""
+  }
+}
