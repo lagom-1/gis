@@ -46,8 +46,9 @@ def _derive_title_from_tif(tif_path: str, fallback: str = "专题图") -> str:
             year = m.group(1)
             region = fname[:m.start()].rstrip('_')
 
-    # 清理区域名中的 lst/LST 后缀
+    # 清理区域名中的 lst/LST/et/ET 后缀
     region = re.sub(r'_?[Ll][Ss][Tt]$', '', region)
+    region = re.sub(r'_?[Ee][Tt]$', '', region)
 
     parts = []
     if region:
@@ -57,7 +58,11 @@ def _derive_title_from_tif(tif_path: str, fallback: str = "专题图") -> str:
     elif year:
         parts.append(f"{year}年")
 
-    parts.append("LST专题图")
+    # 根据文件名判断产品类型
+    if re.search(r'[_-]?[Ee][Tt]', fname):
+        parts.append("蒸散发(ET)专题图")
+    else:
+        parts.append("LST专题图")
     return "".join(parts) if parts else fallback
 
 

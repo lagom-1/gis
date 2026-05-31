@@ -765,6 +765,275 @@ def gee_compute_lst(
         return {"success": False, "message": f"GEE LST 反演失败: {err}"}
 
 
+def gee_compute_et(
+    start_date: str,
+    end_date: str,
+    output_tif: str,
+    region: Any = None,
+    region_path: Optional[str] = None,
+    scale: int = 30,
+    cloud_pct: float = 30,
+    project_id: Optional[str] = None,
+    download_timeout: int = 7200,
+    drive_folder: str = "",
+    local_drive_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    在 GEE 云端基于 SEBAL 模型计算地表蒸散发 (ET)，只下载日 ET (mm/d) TIF。
+
+    流程：
+    1) 筛选 Landsat 8/9 L2 影像
+    2) 获取 ERA5-Land 风速和气压
+    3) 在 GEE 端计算 SEBAL 模型（Rn, G, H, LE, ET）
+    4) 中值合成后直接 HTTP 下载单波段 GeoTIFF
+    """
+    import math
+
+    init_result = init_gee(project_id=project_id)
+    if not init_result.get("success"):
+        return init_result
+
+    try:
+        # 保存原始 GeoJSON 几何用于后续精确掩码
+        _geojson_geom = None
+        if isinstance(region, dict):
+            gtype = region.get("type", "")
+            if gtype == "Feature":
+                _geojson_geom = region.get("geometry")
+            elif gtype in ("Polygon", "MultiPolygon"):
+                _geojson_geom = region
+
+        geom = _normalize_region(region=region, region_path=region_path)
+    except Exception as e:
+        return {"success": False, "message": f"AOI 解析失败: {e}"}
+
+    try:
+        # 渐进式云量降级
+        cloud_levels = sorted(set([float(cloud_pct), 40, 60, 80, 100]))
+        col = None
+        count = 0
+        used_cloud_pct = float(cloud_pct)
+
+        for level in cloud_levels:
+            if level < used_cloud_pct - 0.01:
+                continue
+            l8 = (
+                ee.ImageCollection("LANDSAT/LC08/C02/T1_L2")
+                .filterBounds(geom)
+                .filterDate(start_date, end_date)
+                .filter(ee.Filter.lte("CLOUD_COVER", level))
+            )
+            l9 = (
+                ee.ImageCollection("LANDSAT/LC09/C02/T1_L2")
+                .filterBounds(geom)
+                .filterDate(start_date, end_date)
+                .filter(ee.Filter.lte("CLOUD_COVER", level))
+            )
+            col = l8.merge(l9)
+            count = col.size().getInfo()
+            if count > 0:
+                used_cloud_pct = level
+                break
+
+        if count == 0:
+            return {
+                "success": False,
+                "message": f"指定时段 {start_date}~{end_date} 云量<={cloud_pct}% 无可用影像，已尝试放宽至 100% 仍无数据。",
+            }
+
+        if used_cloud_pct > float(cloud_pct):
+            print(f"[GEE ET] 注意：原始云量阈值 {cloud_pct}% 无可用影像，已自动放宽至 {used_cloud_pct}%（找到 {count} 景）")
+
+        # 云掩膜
+        from gis.gee.collection import mask_clouds_qa as _mask_clouds_qa
+        qa = col.first().select("QA_PIXEL").bandNames()
+        if qa:
+            col = col.map(_mask_clouds_qa)
+
+        # DEM
+        elevation = ee.Image("USGS/SRTMGL1_003").select("elevation")
+
+        # ERA5-Land 风速和气压（取卫星过境时间约 10:00 UTC）
+        era5 = (
+            ee.ImageCollection("ECMWF/ERA5_LAND/HOURLY")
+            .filterDate(start_date, end_date)
+            .filterBounds(geom)
+            .filter(ee.Filter.eq("hour", 10))
+        )
+        wind_u = era5.select("u_component_of_wind_10m").mean()
+        wind_v = era5.select("v_component_of_wind_10m").mean()
+        wind_speed = wind_u.pow(2).add(wind_v.pow(2)).sqrt()
+        pressure = era5.select("surface_pressure").mean()
+
+        # 太阳天顶角（从影像元数据获取）
+        first_img = col.first()
+        sun_elevation = ee.Number(first_img.get("SUN_ELEVATION"))
+        solar_zenith = sun_elevation.multiply(math.pi / 180)
+
+        # 儒略日
+        doy = ee.Number(first_img.get("system:time_start")).divide(86400000).add(25569).int()
+
+        # GEE 端 SEBAL 计算
+        from gis.sebal import preprocess_landsat, calc_sebal
+
+        def _compute_et(image):
+            processed = preprocess_landsat(image)
+            sebal_result = calc_sebal(
+                image=processed,
+                wind_speed=wind_speed,
+                pressure=pressure,
+                elevation=elevation,
+                solar_zenith=solar_zenith,
+                doy=doy,
+            )
+            return sebal_result.select("ET_day").copyProperties(image, ["system:time_start"])
+
+        et_col = col.map(_compute_et)
+        et_img = et_col.median().clip(geom)
+
+        # 计算统计信息
+        stats = et_img.reduceRegion(
+            reducer=ee.Reducer.minMax().combine(
+                ee.Reducer.mean(), sharedInputs=True
+            ).combine(ee.Reducer.stdDev(), sharedInputs=True),
+            geometry=geom,
+            scale=scale,
+            bestEffort=True,
+        ).getInfo()
+
+        # 下载
+        print(f"[GEE ET] 云端 SEBAL 计算完成，共 {count} 景影像 → 中值合成，正在下载...")
+        folder_name = (drive_folder or GEE_DRIVE_FOLDER).strip() or GEE_DRIVE_FOLDER
+        sync_dir = local_drive_path or str(GDRIVE_SYNC_DIR)
+
+        size_info = _estimate_download_size(geom, scale)
+        use_drive = size_info and size_info["size_mb"] > 45
+
+        if use_drive:
+            print(f"[GEE ET] 区域较大（约 {size_info['size_mb']}MB），走 Drive 导出...")
+            import time as _time
+            _ts = int(_time.time()) % 100000
+            task_name = f"gee_et_{start_date.replace('-', '')}_{end_date.replace('-', '')}_{_ts}"
+            drive_path = _wait_drive_file(
+                export_img=et_img,
+                task_name=task_name,
+                folder=folder_name,
+                scale=int(scale),
+                geom=geom,
+                sync_dir=sync_dir,
+                timeout_sec=int(download_timeout),
+            )
+            if drive_path:
+                _ensure_parent(output_tif)
+                shutil.copy2(drive_path, output_tif)
+                file_size = os.path.getsize(output_tif) / (1024 * 1024)
+                print(f"[GEE ET] Drive 导出完成: {output_tif} ({file_size:.1f}MB)")
+                if _geojson_geom:
+                    try:
+                        _mask_tif_to_geojson(output_tif, _geojson_geom)
+                    except Exception as e:
+                        print(f"[GEE ET] 几何掩码失败（TIF 已保留）: {e}")
+            else:
+                return {
+                    "success": False,
+                    "message": f"GEE ET 已导出到 Google Drive，但本地同步目录未找到文件",
+                }
+        else:
+            direct_result = _download_direct(
+                export_img=et_img.rename("ET_day"),
+                geom=geom,
+                scale=int(scale),
+                output_tif=output_tif,
+                timeout_sec=int(download_timeout),
+                geojson_geom=_geojson_geom,
+            )
+            if direct_result.get("success"):
+                file_size = os.path.getsize(output_tif) / (1024 * 1024)
+            elif direct_result.get("too_large"):
+                print(f"[GEE ET] 直接下载失败，回退 Drive 导出...")
+                import time as _time
+                _ts = int(_time.time()) % 100000
+                task_name = f"gee_et_{start_date.replace('-', '')}_{end_date.replace('-', '')}_{_ts}"
+                drive_path = _wait_drive_file(
+                    export_img=et_img,
+                    task_name=task_name,
+                    folder=folder_name,
+                    scale=int(scale),
+                    geom=geom,
+                    sync_dir=sync_dir,
+                    timeout_sec=int(download_timeout),
+                )
+                if drive_path:
+                    _ensure_parent(output_tif)
+                    shutil.copy2(drive_path, output_tif)
+                    file_size = os.path.getsize(output_tif) / (1024 * 1024)
+                    if _geojson_geom:
+                        try:
+                            _mask_tif_to_geojson(output_tif, _geojson_geom)
+                        except Exception as e:
+                            print(f"[GEE ET] 几何掩码失败（TIF 已保留）: {e}")
+                else:
+                    return {
+                        "success": False,
+                        "message": direct_result.get("message", "下载失败"),
+                    }
+            else:
+                return direct_result
+            file_size = os.path.getsize(output_tif) / (1024 * 1024)
+
+        et_min = round(stats.get("ET_day_min", 0), 2)
+        et_max = round(stats.get("ET_day_max", 0), 2)
+        et_mean = round(stats.get("ET_day_mean", 0), 2)
+
+        return {
+            "success": True,
+            "message": f"GEE 云端 SEBAL ET 计算完成：{count} 景合成（云量≤{used_cloud_pct:.0f}%），{file_size:.1f}MB，ET范围 {et_min}~{et_max} mm/d，均值 {et_mean} mm/d",
+            "output_tif": output_tif,
+            "scene_count": count,
+            "cloud_pct_used": used_cloud_pct,
+            "et_min": et_min,
+            "et_max": et_max,
+            "et_mean": et_mean,
+        }
+
+    except Exception as e:
+        err = str(e)
+        tmp_path = output_tif + ".downloading"
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        return {"success": False, "message": f"GEE SEBAL ET 计算失败: {err}"}
+
+
+def gee_download_monthly_et(
+    start_date: str,
+    end_date: str,
+    output_tif: str,
+    region: Any = None,
+    region_path: Optional[str] = None,
+    scale: int = 30,
+    project_id: Optional[str] = None,
+    drive_folder: str = "",
+    local_drive_path: Optional[str] = None,
+    download_timeout: int = 7200,
+) -> Dict[str, Any]:
+    """
+    月度 ET 合成：选取当月最优场景，SEBAL 计算后输出日 ET (mm/d)。
+    """
+    return gee_compute_et(
+        start_date=start_date,
+        end_date=end_date,
+        output_tif=output_tif,
+        region=region,
+        region_path=region_path,
+        scale=scale,
+        cloud_pct=30,
+        project_id=project_id,
+        download_timeout=download_timeout,
+        drive_folder=drive_folder,
+        local_drive_path=local_drive_path,
+    )
+
+
 def gee_download_landsat_sca(
     start_date: str,
     end_date: str,
